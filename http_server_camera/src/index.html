@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-S3 Camera</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+    <div class="grid-overlay"></div>
+    <div class="container">
+        <header>
+            <h1>ESP32-S3 Camera</h1>
+            <p>Live capture from XIAO ESP32-S3 Sense</p>
+        </header>
+
+        <div class="card">
+            <div class="ferris-container">
+                <img id="camera-image" class="ferris" src="/capture" alt="Camera capture">
+                <div class="scan-lines"></div>
+            </div>
+        </div>
+
+        <div style="text-align: center;">
+            <button class="status connected" onclick="refreshImage()">
+                <span class="status-indicator"></span>
+                Refresh
+            </button>
+            <button class="status connected" onclick="toggleAutoRefresh()">
+                <span class="status-indicator" id="auto-indicator"></span>
+                <span id="auto-text">Auto: Off</span>
+            </button>
+        </div>
+
+        <div class="card" style="margin-top: 30px;">
+            <div class="status connected" id="status">
+                <span class="status-indicator"></span>
+                Connected
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let autoRefresh = false;
+        let refreshInterval = null;
+
+        function refreshImage() {
+            const img = document.getElementById('camera-image');
+            img.src = '/capture?' + new Date().getTime();
+        }
+
+        function toggleAutoRefresh() {
+            autoRefresh = !autoRefresh;
+            const indicator = document.getElementById('auto-indicator');
+            const text = document.getElementById('auto-text');
+
+            if (autoRefresh) {
+                text.textContent = 'Auto: On';
+                refreshInterval = setInterval(refreshImage, 1000);
+            } else {
+                text.textContent = 'Auto: Off';
+                if (refreshInterval) {
+                    clearInterval(refreshInterval);
+                    refreshInterval = null;
+                }
+            }
+        }
+    </script>
+</body>
+
+</html>
