@@ -1,8 +1,16 @@
-//! - set SSID and PASSWORD env variable
-//! - set STATIC_IP and GATEWAY_IP env variable (e.g. "192.168.2.191" / "192.168.2.1")
-//! - might be necessary to configure your WiFi access point accordingly
-//! - uses the given static IP
-//! - responds with some HTML content when connecting to port 8080
+// This file defines the ESP32 no_std Embassy application entry point.
+// - Initializes hardware, RTOS support, heap allocation, WiFi, and the network stack.
+// - Connects to WiFi using credentials from `credentials.rs` and serves HTTP on port 8080.
+// - Serves embedded `index.html` and `style.css`, plus `/api/count` JSON for button presses.
+// - Monitors GPIO6 as a pull-up button input and tracks presses with an atomic counter.
+// - Depends on esp-hal, esp-radio, embassy-executor, embassy-net, and embassy-time.
+
+// How to set up and run:
+// - Set SSID and PASSWORD env variable
+// - Set STATIC_IP and GATEWAY_IP env variable (e.g. "192.168.2.191" / "192.168.2.1")
+// - Might be necessary to configure your WiFi access point accordingly
+// - Uses the given static IP
+// - Responds with some HTML content when connecting to port 8080
 
 #![no_std]
 #![no_main]
@@ -42,9 +50,10 @@ macro_rules! mk_static {
     }};
 }
 
-// Credentials is not committed to the repository for security reasons
-// it should define SSID and PASSWORD constants:
-include!("./credentials.rs");
+include!("./env.rs");
+// Environment variables are not committed to the repository for security reasons
+// It should be structured as like this:
+
 //pub const WIFI_SSID: &str = "<WIFI_NAME>";
 //pub const WIFI_PASSWORD: &str = "<WIFI_PASSWORD>";
 
@@ -137,7 +146,7 @@ async fn wifi_connection_task(mut controller: WifiController<'static>) {
                 .unwrap();
             for ap in result {
                 println!("  SSID: {} | Signal: {} dBm", ap.ssid, ap.signal_strength);
-                if ap.ssid == SSID {
+                if ap.ssid == WIFI_SSID {
                     println!("  >>> Found target network!");
                 }
             }
@@ -215,109 +224,7 @@ async fn http_server_task(stack: Stack<'static>) {
         socket.close();
         Timer::after(Duration::from_millis(100)).await;
     }
-} // ============================================================================
-// MAIN ENTRY POINT
-// ============================================================================
-
-#[esp_rtos::main]
-async fn main(spawner: Spawner) -> ! {
-    // ============================================================================
-    // HARDWARE INITIALIZATION
-    // ============================================================================
-
-    esp_println::logger::init_logger_from_env();
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let peripherals = esp_hal::init(config);
-
-    println!("Init!");
-
-    // Allocate 72KB heap for dynamic memory allocation
-    esp_alloc::heap_allocator!(size: 72 * 1024);
-
-    // Initialize timer and RTOS
-    let timg0 = TimerGroup::new(peripherals.TIMG0);
-    #[cfg(target_arch = "riscv32")]
-    let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-    esp_rtos::start(
-        timg0.timer0,
-        #[cfg(target_arch = "riscv32")]
-        sw_int.software_interrupt0,
-    );
-
-    // ============================================================================
-    // BUTTON SETUP
-    // ============================================================================
-
-    let button_config = InputConfig::default().with_pull(Pull::Up);
-    let button_pin = Input::new(peripherals.GPIO6, button_config);
-
-    // ============================================================================
-    // WIFI AND NETWORK STACK SETUP
-    // ============================================================================
-
-    let esp_radio_ctrl = mk_static!(Controller<'static>, esp_radio::init().unwrap());
-    let (controller, interfaces) =
-        esp_radio::wifi::new(esp_radio_ctrl, peripherals.WIFI, Default::default()).unwrap();
-
-    let wifi_device = interfaces.sta;
-    println!("ESP32 MAC Address: {:02X?}", wifi_device.mac_address());
-
-    // Configure network stack with static IP
-    let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-        address: embassy_net::Ipv4Cidr::new(
-            embassy_net::Ipv4Address::new(STATIC_IP[0], STATIC_IP[1], STATIC_IP[2], STATIC_IP[3]),
-            24,
-        ),
-        gateway: Some(embassy_net::Ipv4Address::new(
-            GATEWAY[0], GATEWAY[1], GATEWAY[2], GATEWAY[3],
-        )),
-        dns_servers: Default::default(),
-    });
-
-    println!(
-        "Configuring static IP: {}.{}.{}.{}",
-        STATIC_IP[0], STATIC_IP[1], STATIC_IP[2], STATIC_IP[3]
-    );
-    println!(
-        "Gateway: {}.{}.{}.{}",
-        GATEWAY[0], GATEWAY[1], GATEWAY[2], GATEWAY[3]
-    );
-
-    let rng = Rng::new();
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-
-    // Initialize embassy-net stack
-    let (stack, runner) = embassy_net::new(
-        wifi_device,
-        net_config,
-        mk_static!(StackResources<3>, StackResources::<3>::new()),
-        seed,
-    );
-
-    // ============================================================================
-    // SPAWN TASKS
-    // ============================================================================
-
-    spawner.spawn(button_monitor_task(button_pin)).ok();
-    spawner.spawn(wifi_connection_task(controller)).ok();
-    spawner.spawn(net_task(runner)).ok();
-    spawner.spawn(http_server_task(stack)).ok();
-
-    // ============================================================================
-    // MAIN LOOP
-    // ============================================================================
-
-    println!("All tasks spawned, entering main loop");
-
-    loop {
-        println!("Main loop tick");
-        Timer::after(Duration::from_millis(1000)).await;
-    }
 }
-
-// ============================================================================
-// HTTP SERVER FUNCTIONS
-// ============================================================================
 
 /// Async function to handle HTTP requests
 async fn handle_http_request_async(
@@ -432,4 +339,97 @@ fn format_count_json(count: u32, buffer: &mut [u8]) -> &str {
     let _ = write!(cursor, "{{\"count\":{}}}", count);
 
     core::str::from_utf8(&cursor.buffer[..cursor.pos]).unwrap_or("{\"count\":0}")
+}
+
+// ============================================================================
+// MAIN ENTRY POINT
+// ============================================================================
+
+// NOTE: esp_rtos is not FreeRTOS
+// It's a custom RTOS (minimal runtime layer) built on top of the timer and software interrupt features of the ESP32.
+// It provides task scheduling and async/await support, but does not use the FreeRTOS API directly.
+// This esp_rtos::main attribute sets up the necessary hardware and starts the async executor for our tasks.
+
+#[esp_rtos::main]
+async fn main(spawner: Spawner) -> ! {
+    // ============================================================================
+    // HARDWARE INITIALIZATION
+    // ============================================================================
+
+    esp_println::logger::init_logger_from_env();
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
+
+    println!("Init!");
+
+    // Allocate 72KB heap for dynamic memory allocation
+    esp_alloc::heap_allocator!(size: 72 * 1024);
+
+    // Initialize timer and RTOS
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    #[cfg(target_arch = "riscv32")]
+    let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    esp_rtos::start(
+        timg0.timer0,
+        #[cfg(target_arch = "riscv32")]
+        sw_int.software_interrupt0,
+    );
+
+    // 1. Setup button
+    let button_config = InputConfig::default().with_pull(Pull::Up);
+    let button_pin = Input::new(peripherals.GPIO6, button_config);
+
+    // 2. Setup WIFI and network stack using esp-radio and embassy-net
+    let esp_radio_ctrl = mk_static!(Controller<'static>, esp_radio::init().unwrap());
+    let (controller, interfaces) =
+        esp_radio::wifi::new(esp_radio_ctrl, peripherals.WIFI, Default::default()).unwrap();
+
+    let wifi_device = interfaces.sta;
+    println!("ESP32 MAC Address: {:02X?}", wifi_device.mac_address());
+
+    // 3. Configure network stack with static IP
+    let net_config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+        address: embassy_net::Ipv4Cidr::new(
+            embassy_net::Ipv4Address::new(STATIC_IP[0], STATIC_IP[1], STATIC_IP[2], STATIC_IP[3]),
+            24,
+        ),
+        gateway: Some(embassy_net::Ipv4Address::new(
+            GATEWAY[0], GATEWAY[1], GATEWAY[2], GATEWAY[3],
+        )),
+        dns_servers: Default::default(),
+    });
+
+    println!(
+        "Configuring static IP: {}.{}.{}.{}",
+        STATIC_IP[0], STATIC_IP[1], STATIC_IP[2], STATIC_IP[3]
+    );
+    println!(
+        "Gateway: {}.{}.{}.{}",
+        GATEWAY[0], GATEWAY[1], GATEWAY[2], GATEWAY[3]
+    );
+
+    let rng = Rng::new();
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
+
+    // 4. Initialize embassy-net stack
+    let (stack, runner) = embassy_net::new(
+        wifi_device,
+        net_config,
+        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        seed,
+    );
+
+    // 5. Spawn async tasks for button monitoring, WiFi connection management, network stack, and HTTP server
+    spawner.spawn(button_monitor_task(button_pin)).ok();
+    spawner.spawn(wifi_connection_task(controller)).ok();
+    spawner.spawn(net_task(runner)).ok();
+    spawner.spawn(http_server_task(stack)).ok();
+
+    // 6. Start main loop
+    println!("All tasks spawned, entering main loop");
+
+    loop {
+        println!("Main loop tick");
+        Timer::after(Duration::from_millis(1000)).await;
+    }
 }

@@ -1,0 +1,2 @@
+- bare-metal_http_server - Webpage server with click counter [no-FreeRTOS (bare-metal with thin ESP_RTOS), no_std, esp-hal, embassy, gpio]
+- http_server_with_camera - Webpage server that takes photos, displays them, analyzes pixels, sends web requests [FreeRTOS, std, esp-idf]

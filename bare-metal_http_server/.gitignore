@@ -6,9 +6,11 @@ Cargo.lock
 /build/
 sdkconfig
 sdkconfig.old
+env.rs
 
 # Rust
 **/*.rs.bk
+release
 
 # IDE
 .idea/
