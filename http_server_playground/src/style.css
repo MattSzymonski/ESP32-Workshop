@@ -1,0 +1,85 @@
+body {
+    font-family: system-ui, sans-serif;
+    background: #111827;
+    color: #f9fafb;
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    margin: 0;
+}
+
+main {
+    padding: 2rem;
+    border-radius: 1rem;
+    background: #1f2937;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+h1 {
+    color: #38bdf8;
+}
+
+/* Module card grid — cards sit side-by-side in the center column */
+.modules {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    justify-content: center;
+    margin-top: 1.5rem;
+}
+
+.module-card {
+    background: #374151;
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.module-card h2 {
+    color: #a78bfa;
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+.module-card p {
+    margin: 0;
+    color: #9ca3af;
+    font-size: 0.85rem;
+    text-align: center;
+}
+
+.module-card button {
+    background: #6d28d9;
+    color: #f9fafb;
+    border: none;
+    padding: 0.5rem 1.5rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: background 0.15s;
+}
+
+.module-card button:hover {
+    background: #7c3aed;
+}
+
+.module-card input[type=range] {
+    width: 100%;
+    accent-color: #7c3aed;
+}
+
+.module-card label {
+    font-size: 0.9rem;
+    color: #d1d5db;
+}
+
+.status {
+    min-height: 1.2em;
+    font-size: 0.85rem;
+    color: #6ee7b7;
+}

@@ -1,0 +1,18 @@
+[target.riscv32imac-esp-espidf]
+linker = "ldproxy"
+
+[build]
+target = "riscv32imac-esp-espidf"
+# Relocate cargo output to a short path to avoid Windows MAX_PATH issues.
+target-dir = "C:\\esp\\target\\http_server_tools"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32c6"
+ESP_IDF_VERSION = "v5.2.3"
+ESP_IDF_PATH_ISSUES = "warn"
+# Relocate ESP-IDF toolchain (gcc, cmake, python venv) to a short path.
+# esp-idf-sys reads ESP_IDF_TOOLS_INSTALL_DIR; "custom:<path>" means install there.
+ESP_IDF_TOOLS_INSTALL_DIR = "custom:C:\\esp\\tools"

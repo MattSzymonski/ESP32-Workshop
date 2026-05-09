@@ -1,0 +1,28 @@
+# ESP-IDF build artifacts
+.embuild/
+target/
+components_esp32.lock
+Cargo.lock
+/build/
+sdkconfig
+sdkconfig.old
+env.rs
+
+# Rust
+**/*.rs.bk
+release
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.orig

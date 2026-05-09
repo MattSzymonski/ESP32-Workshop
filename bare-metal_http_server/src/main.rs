@@ -41,6 +41,8 @@ use esp_radio::{
 esp_bootloader_esp_idf::esp_app_desc!();
 
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
+// Convenience macro that allocates a value of type `$t` in a static `StaticCell` and
+// returns a `&'static mut` reference. Avoids repeating boilerplate for every long-lived allocation.
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -350,6 +352,9 @@ fn format_count_json(count: u32, buffer: &mut [u8]) -> &str {
 // It provides task scheduling and async/await support, but does not use the FreeRTOS API directly.
 // This esp_rtos::main attribute sets up the necessary hardware and starts the async executor for our tasks.
 
+/// Application entry point: initialises all hardware and spawns the four concurrent tasks
+/// (button monitor, WiFi connection manager, network stack runner, HTTP server).
+/// Runs in an idle loop afterwards to keep the executor alive.
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     // ============================================================================

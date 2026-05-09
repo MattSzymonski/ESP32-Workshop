@@ -1,0 +1,29 @@
+<div class="module-card">
+    <h2>ST7735S Display</h2>
+    <p>0.96&quot; 80&times;160 RGB IPS on SPI2</p>
+    <input type="text" id="disp-text" placeholder="Hello ESP32" maxlength="18"
+        style="width:100%;padding:0.4rem;border-radius:0.4rem;border:none;background:#4b5563;color:#f9fafb;box-sizing:border-box;">
+    <input type="color" id="disp-color" value="#ffffff" title="Text color"
+        style="width:3rem;height:2rem;border:none;border-radius:0.4rem;cursor:pointer;background:none;">
+    <button onclick="sendText()">Send</button>
+    <button onclick="clearDisp()" style="background:#374151">Clear</button>
+    <p id="disp-status" class="status"></p>
+    <script>
+        async function sendText() {
+            const msg = encodeURIComponent(document.getElementById('disp-text').value || 'Hello');
+            const hex = document.getElementById('disp-color').value.replace('#', '');
+            const s = document.getElementById('disp-status');
+            s.textContent = 'Sending\u2026';
+            await fetch('/api/display/text?msg=' + msg + '&color=' + hex);
+            s.textContent = 'Done!';
+            setTimeout(() => s.textContent = '', 2000);
+        }
+        async function clearDisp() {
+            const s = document.getElementById('disp-status');
+            s.textContent = 'Clearing\u2026';
+            await fetch('/api/display/clear?color=000000');
+            s.textContent = 'Cleared!';
+            setTimeout(() => s.textContent = '', 2000);
+        }
+    </script>
+</div>

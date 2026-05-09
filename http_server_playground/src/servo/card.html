@@ -1,0 +1,19 @@
+<div class="module-card">
+    <h2>SG90 Servo</h2>
+    <p>Tower Pro Micro Servo 9g on GPIO6</p>
+    <label>Angle: <strong id="angle-val">90</strong>&deg;</label>
+    <input type="range" id="angle" min="0" max="180" value="90"
+        oninput="document.getElementById('angle-val').textContent=this.value">
+    <button onclick="setServo()">Set angle</button>
+    <p id="servo-status" class="status"></p>
+    <script>
+        async function setServo() {
+            const angle = document.getElementById('angle').value;
+            const s = document.getElementById('servo-status');
+            s.textContent = 'Moving\u2026';
+            const data = await fetch('/api/servo?angle=' + angle).then(r => r.json());
+            s.textContent = 'Set to ' + data.angle + '\u00b0';
+            setTimeout(() => s.textContent = '', 2000);
+        }
+    </script>
+</div>

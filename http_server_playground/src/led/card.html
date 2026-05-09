@@ -1,0 +1,15 @@
+<div class="module-card">
+    <h2>WS2812 LED</h2>
+    <p>Addressable RGB LED on GPIO8</p>
+    <button onclick="blink()">Blink white</button>
+    <p id="led-status" class="status"></p>
+    <script>
+        async function blink() {
+            const s = document.getElementById('led-status');
+            s.textContent = 'Blinking\u2026';
+            const data = await fetch('/api/blink').then(r => r.json());
+            s.textContent = data.blinked ? 'Done!' : 'Error';
+            setTimeout(() => s.textContent = '', 2000);
+        }
+    </script>
+</div>
