@@ -8,6 +8,7 @@
 
 mod display;
 mod led;
+mod renderer;
 mod servo;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
@@ -149,7 +150,21 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // 10c. ST7735S 128x160 SPI display via SPI2
-    let display_html = display::register(
+    // let display_html = display::register(
+    //     &mut server,
+    //     peripherals.spi2,
+    //     peripherals.pins.gpio10,        // SCL
+    //     peripherals.pins.gpio11,        // SDA
+    //     peripherals.pins.gpio18.into(), // CS
+    //     peripherals.pins.gpio5.into(),  // DC
+    //     peripherals.pins.gpio6.into(),  // RST, RES
+    //     peripherals.pins.gpio7.into(),  // BL, BLK
+    // )?;
+
+    // 10d. Software 3-D renderer — rotating cube on the same ST7735S via SPI3
+    // Note: renderer owns its own SPI bus instance (SPI3 / HSPI) with the same pins.
+    // To avoid bus contention, do not use the display module and renderer simultaneously.
+    let renderer_html = renderer::register(
         &mut server,
         peripherals.spi2,
         peripherals.pins.gpio10,        // SCL
@@ -161,7 +176,12 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // 11. Build the final index page by substituting all module cards into the template
-    let modules_html = format!("{}{}{}", led_html, servo_html, display_html);
+    // let modules_html = format!(
+    //     "{}{}{}{}",
+    //     led_html, servo_html, display_html, renderer_html
+    // );
+    let modules_html = format!("{}{}{}", led_html, servo_html, renderer_html);
+
     let page_html = Arc::new(INDEX_HTML.replace("{{MODULES}}", &modules_html));
 
     // Handler: GET / — serves the dynamically assembled main HTML page

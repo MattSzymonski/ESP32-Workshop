@@ -1,0 +1,19 @@
+<div class="module-card">
+    <h2>3D Renderer</h2>
+    <p>Software rasterizer — rotating cube on ST7735S</p>
+    <div style="display:flex;gap:8px;">
+        <button onclick="rendererCmd('start')">Start</button>
+        <button onclick="rendererCmd('stop')"
+            style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:#888;">Stop</button>
+    </div>
+    <p id="renderer-status" class="status"></p>
+    <script>
+        async function rendererCmd(cmd) {
+            const s = document.getElementById('renderer-status');
+            s.textContent = cmd === 'start' ? 'Starting\u2026' : 'Stopping\u2026';
+            const data = await fetch('/api/renderer/' + cmd).then(r => r.json());
+            s.textContent = data.running ? 'Running' : 'Stopped';
+            setTimeout(() => s.textContent = '', 3000);
+        }
+    </script>
+</div>
