@@ -1,0 +1,30 @@
+<div style="display:flex;gap:8px;width:100%;align-items:center;">
+    <input type="text" id="disp-text" placeholder="Hello ESP32" maxlength="18"
+        style="flex:1;padding:0.4rem 0.6rem;border:1px solid rgba(255,255,255,0.07);border-radius:8px;background:#1e1e1e;color:#e4e4e4;font-size:13px;box-sizing:border-box;outline:none;">
+    <input type="color" id="disp-color" value="#ffffff" title="Text color"
+        style="width:36px;height:36px;border:1px solid rgba(255,255,255,0.07);border-radius:8px;cursor:pointer;background:#1e1e1e;padding:2px;flex-shrink:0;">
+</div>
+<div style="display:flex;gap:8px;margin-top:8px;">
+    <button onclick="basicSendText()">Send</button>
+    <button onclick="basicClearDisp()"
+        style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:#888;">Clear</button>
+</div>
+<p id="basic-status" class="status"></p>
+<script>
+    async function basicSendText() {
+        var msg = encodeURIComponent(document.getElementById('disp-text').value || 'Hello');
+        var hex = document.getElementById('disp-color').value.replace('#', '');
+        var s = document.getElementById('basic-status');
+        s.textContent = 'Sending\u2026';
+        await fetch('/api/display/text?msg=' + msg + '&color=' + hex);
+        s.textContent = 'Done!';
+        setTimeout(function () { s.textContent = ''; }, 2000);
+    }
+    async function basicClearDisp() {
+        var s = document.getElementById('basic-status');
+        s.textContent = 'Clearing\u2026';
+        await fetch('/api/display/clear?color=000000');
+        s.textContent = 'Cleared!';
+        setTimeout(function () { s.textContent = ''; }, 2000);
+    }
+</script>

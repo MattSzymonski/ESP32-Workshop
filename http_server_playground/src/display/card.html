@@ -1,34 +1,33 @@
-<div class="module-card">
-    <h2>ST7735S Display</h2>
-    <p>0.96&quot; 80&times;160 RGB IPS on SPI2</p>
-    <div style="display:flex;gap:8px;width:100%;align-items:center;">
-        <input type="text" id="disp-text" placeholder="Hello ESP32" maxlength="18"
-            style="flex:1;padding:0.4rem 0.6rem;border:1px solid rgba(255,255,255,0.07);border-radius:8px;background:#1e1e1e;color:#e4e4e4;font-size:13px;box-sizing:border-box;outline:none;">
-        <input type="color" id="disp-color" value="#ffffff" title="Text color"
-            style="width:36px;height:36px;border:1px solid rgba(255,255,255,0.07);border-radius:8px;cursor:pointer;background:#1e1e1e;padding:2px;flex-shrink:0;">
-    </div>
-    <div style="display:flex;gap:8px;">
-        <button onclick="sendText()">Send</button>
-        <button onclick="clearDisp()"
-            style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:#888;">Clear</button>
-    </div>
-    <p id="disp-status" class="status"></p>
+﻿<div class="module-card">
+    <h2>Display</h2>
+    <p>0.96&quot; 80&times;160 ST7735S on SPI2</p>
+    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
+        <div id="disp-mode-track" onclick="dispToggleMode()"
+            style="position:relative;width:44px;height:24px;border-radius:12px;background:#444;transition:background .2s;flex-shrink:0;">
+            <div id="disp-mode-knob"
+                style="position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s;">
+            </div>
+        </div>
+        <span id="disp-mode-label">Basic</span>
+    </label>
+    <div id="disp-basic-panel">{{BASIC_CARD}}</div>
+    <div id="disp-renderer-panel" style="display:none">{{RENDERER_CARD}}</div>
     <script>
-        async function sendText() {
-            const msg = encodeURIComponent(document.getElementById('disp-text').value || 'Hello');
-            const hex = document.getElementById('disp-color').value.replace('#', '');
-            const s = document.getElementById('disp-status');
-            s.textContent = 'Sending\u2026';
-            await fetch('/api/display/text?msg=' + msg + '&color=' + hex);
-            s.textContent = 'Done!';
-            setTimeout(() => s.textContent = '', 2000);
+        var dispMode = 'basic';
+        function dispUpdateVisual() {
+            var r = dispMode === 'renderer';
+            document.getElementById('disp-mode-track').style.background = r ? '#e8703a' : '#444';
+            document.getElementById('disp-mode-knob').style.left = r ? '23px' : '3px';
+            document.getElementById('disp-mode-label').textContent = r ? 'Renderer' : 'Basic';
+            document.getElementById('disp-basic-panel').style.display = r ? 'none' : '';
+            document.getElementById('disp-renderer-panel').style.display = r ? '' : 'none';
         }
-        async function clearDisp() {
-            const s = document.getElementById('disp-status');
-            s.textContent = 'Clearing\u2026';
-            await fetch('/api/display/clear?color=000000');
-            s.textContent = 'Cleared!';
-            setTimeout(() => s.textContent = '', 2000);
+        async function dispToggleMode() {
+            var next = dispMode === 'basic' ? 'renderer' : 'basic';
+            var data = await fetch('/api/display/mode?set=' + next).then(r => r.json());
+            dispMode = data.mode;
+            dispUpdateVisual();
         }
+        dispUpdateVisual();
     </script>
 </div>

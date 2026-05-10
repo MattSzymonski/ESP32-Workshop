@@ -1,98 +1,156 @@
-// This file implements the ST7735S SPI display module for the HTTP server.
-// - Initialises a 128x160 ST7735S display over SPI2 with hardware reset and backlight control.
-// - Registers GET /api/display/text?msg=<text>&color=<hex> to render a text message on screen.
-// - Registers GET /api/display/clear?color=<hex> to fill the screen with a solid color.
-// - Provides URL helpers: percent_decode for encoded text, parse_hex_color for CSS hex colors,
-//   and query_param for extracting named values from a request URI.
-// - Depends on: embedded-graphics, st7735-lcd, esp-idf-svc (SPI2, GPIO, HTTP server).
+﻿// Display module — ST7735S 80x160 SPI display.
+//
+// Owns the SPI hardware and exposes it to two submodules via a shared Mutex:
+//   - basic:    text/clear operations triggered by HTTP requests.
+//   - renderer: software 3-D rasteriser on a background thread.
+//
+// A mode flag (basic | renderer) determines which submodule controls the screen.
+// Switching mode is done via GET /api/display/mode?set=basic|renderer.
+// Submodule HTML fragments are injected into the outer card at startup.
 
-use embedded_graphics::mono_font::{ascii::FONT_10X20, MonoTextStyle};
-use embedded_graphics::pixelcolor::{Rgb565, Rgb888};
-use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyle, Rectangle};
-use embedded_graphics::text::{Baseline, Text};
-use esp_idf_svc::hal::delay::{Ets, FreeRtos};
-use esp_idf_svc::hal::gpio::{AnyIOPin, OutputPin, PinDriver};
+pub mod basic;
+pub mod renderer;
+
+use embedded_hal::digital::OutputPin;
+use embedded_hal::spi::SpiDevice;
+use esp_idf_svc::hal::delay::FreeRtos;
+use esp_idf_svc::hal::gpio::{AnyIOPin, Output, OutputPin as EspOutputPin, PinDriver};
 use esp_idf_svc::hal::spi::config::{Config as SpiConfig, DriverConfig as SpiDriverConfig};
-use esp_idf_svc::hal::spi::{SpiAnyPins, SpiDeviceDriver};
+use esp_idf_svc::hal::spi::{Dma, SpiAnyPins, SpiDeviceDriver};
 use esp_idf_svc::hal::units::FromValueType;
 use esp_idf_svc::http::server::EspHttpServer;
 use log::info;
-use st7735_lcd::{Orientation, ST7735};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 const CARD_HTML: &str = include_str!("card.html");
 
-const PANEL_WIDTH: u16 = 160;
-const PANEL_HEIGHT: u16 = 80;
-const OFFSET_X: u16 = 0;
-const OFFSET_Y: u16 = 24;
+// ─── display geometry (shared with submodules) ────────────────────────────────
+pub(crate) const W: usize = 160;
+pub(crate) const H: usize = 80;
+pub(crate) const PIXELS: usize = W * H;
+pub(crate) const FB_BYTES: usize = PIXELS * 2; // big-endian RGB565: 2 bytes/pixel
+pub(crate) const DISPLAY_Y_OFFSET: u16 = 24;   // physical panel Y address offset
 
-// Parses a 6-digit hex color string (with or without '#' prefix) into an Rgb565 value.
-// Returns white on any parse failure (invalid length or non-hex characters).
-fn parse_hex_color(hex: &str) -> Rgb565 {
-    let hex = hex.trim_start_matches('#');
+// ─── SPI config ──────────────────────────────────────────────────────────────
+const SPI_FREQ_MHZ: u32 = 40;
+const SPI_DMA_BUF_BYTES: usize = FB_BYTES.next_power_of_two();
 
-    if hex.len() != 6 {
-        return Rgb565::WHITE;
-    }
+// ─── mode constants ───────────────────────────────────────────────────────────
+pub(crate) const MODE_BASIC: u8    = 0;
+pub(crate) const MODE_RENDERER: u8 = 1;
 
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255);
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
+pub(crate) type SharedMode = Arc<AtomicU8>;
 
-    Rgb888::new(r, g, b).into()
+// ─── DisplayOps trait ─────────────────────────────────────────────────────────
+// Trait-object interface shared between the basic and renderer submodules.
+// Using dyn dispatch avoids having to name the concrete generic SPI/DC types
+// across module boundaries.
+pub(crate) trait DisplayOps: Send {
+    fn set_pixel(&mut self, x: u16, y: u16, color: u16);
+    fn fill_solid(&mut self, color: u16);
+    fn flush_frame(&mut self, fb: &[u8; FB_BYTES]);
+    fn flush_frame_timed(&mut self, fb: &[u8; FB_BYTES]) -> (u64, u64);
+    fn set_full_frame_window(&mut self);
 }
 
-// Extracts the value of a named query parameter from a request URI.
-// Returns None if the query string is absent or the parameter is not found.
-fn query_param<'a>(uri: &'a str, name: &str) -> Option<&'a str> {
-    let query = uri.split_once('?')?.1;
+pub(crate) type SharedDisplay = Arc<Mutex<Box<dyn DisplayOps>>>;
 
-    for pair in query.split('&') {
-        let (key, value) = pair.split_once('=')?;
-        if key == name {
-            return Some(value);
-        }
-    }
+// ─── raw ST7735S driver ───────────────────────────────────────────────────────
 
-    None
+struct RawST7735<S, DC> {
+    spi: S,
+    dc:  DC,
 }
 
-// Decodes a percent-encoded URL string (e.g. "%20" → " ") into a plain UTF-8 String.
-// Non-encoded bytes and malformed sequences are passed through as-is.
-fn percent_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = String::new();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex) = core::str::from_utf8(&bytes[i + 1..i + 3]) {
-                if let Ok(value) = u8::from_str_radix(hex, 16) {
-                    out.push(value as char);
-                    i += 3;
-                    continue;
-                }
-            }
-        }
-
-        out.push(bytes[i] as char);
-        i += 1;
+impl<S: SpiDevice, DC: OutputPin> RawST7735<S, DC> {
+    fn cmd(&mut self, cmd: u8) {
+        let _ = self.dc.set_low();
+        let _ = self.spi.write(&[cmd]);
     }
-
-    out
+    fn data(&mut self, data: &[u8]) {
+        let _ = self.dc.set_high();
+        let _ = self.spi.write(data);
+    }
+    fn cmd_data(&mut self, cmd: u8, data: &[u8]) {
+        self.cmd(cmd);
+        self.data(data);
+    }
+    fn init(&mut self) {
+        self.cmd(0x01); FreeRtos::delay_ms(200);  // SWRESET
+        self.cmd(0x11); FreeRtos::delay_ms(200);  // SLPOUT
+        self.cmd_data(0xB1, &[0x01, 0x2C, 0x2D]); // FRMCTR1
+        self.cmd_data(0xB2, &[0x01, 0x2C, 0x2D]); // FRMCTR2
+        self.cmd_data(0xB3, &[0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D]); // FRMCTR3
+        self.cmd_data(0xB4, &[0x07]);              // INVCTR
+        self.cmd_data(0xC0, &[0xA2, 0x02, 0x84]); // PWCTR1
+        self.cmd_data(0xC1, &[0xC5]);             // PWCTR2
+        self.cmd_data(0xC2, &[0x0A, 0x00]);       // PWCTR3
+        self.cmd_data(0xC3, &[0x8A, 0x2A]);       // PWCTR4
+        self.cmd_data(0xC4, &[0x8A, 0xEE]);       // PWCTR5
+        self.cmd_data(0xC5, &[0x0E]);             // VMCTR1
+        self.cmd(0x20);                           // INVOFF
+        self.cmd_data(0x3A, &[0x05]);             // COLMOD: RGB565
+        self.cmd_data(0x36, &[0x68]);             // MADCTL: landscape + BGR
+        self.cmd(0x29); FreeRtos::delay_ms(200);  // DISPON
+    }
 }
 
-/// Initialises the ST7735S display over SPI and registers two HTTP endpoints:
-/// - `GET /api/display/text?msg=<text>&color=<hex>` — clears the screen and renders a text message.
-/// - `GET /api/display/clear?color=<hex>` — fills the screen with the given color (default black).
-/// Returns the HTML card string to be embedded in the main page.
+impl<S: SpiDevice + Send, DC: OutputPin + Send> DisplayOps for RawST7735<S, DC> {
+    fn set_full_frame_window(&mut self) {
+        const EX: u16 = (W - 1) as u16;
+        const EY: u16 = (H - 1) as u16 + DISPLAY_Y_OFFSET;
+        self.cmd_data(0x2A, &[0, 0, 0, EX as u8]);
+        self.cmd_data(0x2B, &[0, DISPLAY_Y_OFFSET as u8, 0, EY as u8]);
+    }
+
+    /// Write a single pixel via CASET/RASET/RAMWR.
+    fn set_pixel(&mut self, x: u16, y: u16, color: u16) {
+        let py = y + DISPLAY_Y_OFFSET;
+        self.cmd_data(0x2A, &[0, x as u8, 0, x as u8]);
+        self.cmd_data(0x2B, &[0, py as u8, 0, py as u8]);
+        let [hi, lo] = color.to_be_bytes();
+        self.cmd_data(0x2C, &[hi, lo]);
+    }
+
+    /// Fill the entire screen with one colour — one scanline buffer, H writes.
+    fn fill_solid(&mut self, color: u16) {
+        self.set_full_frame_window();
+        let [hi, lo] = color.to_be_bytes();
+        let mut row = [0u8; W * 2];
+        for i in 0..W { row[i*2] = hi; row[i*2+1] = lo; }
+        self.cmd(0x2C);
+        let _ = self.dc.set_high();
+        for _ in 0..H { let _ = self.spi.write(&row); }
+    }
+
+    fn flush_frame(&mut self, fb: &[u8; FB_BYTES]) {
+        self.cmd(0x2C);
+        let _ = self.dc.set_high();
+        let _ = self.spi.write(fb);
+    }
+
+    fn flush_frame_timed(&mut self, fb: &[u8; FB_BYTES]) -> (u64, u64) {
+        let t0 = std::time::Instant::now();
+        let _ = self.dc.set_low();
+        let _ = self.spi.write(&[0x2C]);
+        let cmd_us = t0.elapsed().as_micros() as u64;
+        let t1 = std::time::Instant::now();
+        let _ = self.dc.set_high();
+        let _ = self.spi.write(fb);
+        (cmd_us, t1.elapsed().as_micros() as u64)
+    }
+}
+
+// ─── public entry point ───────────────────────────────────────────────────────
+
+/// Initialises the ST7735S, hands the shared driver to both submodules, registers
+/// the mode-switch endpoint, and returns the assembled HTML card.
 pub fn register<SPI>(
     server: &mut EspHttpServer,
     spi: SPI,
-    sclk: impl OutputPin + 'static,
-    mosi: impl OutputPin + 'static,
+    sclk: impl EspOutputPin + 'static,
+    mosi: impl EspOutputPin + 'static,
     cs: AnyIOPin<'static>,
     dc: AnyIOPin<'static>,
     rst: AnyIOPin<'static>,
@@ -106,128 +164,70 @@ where
     bl_drv.set_high()?;
     core::mem::forget(bl_drv);
 
-    info!("display: configuring DC and RST pins");
-    let dc_drv = PinDriver::output(dc)?;
-    let mut rst_drv = PinDriver::output(rst)?;
-
     info!("display: hardware reset");
-    rst_drv.set_high()?;
-    FreeRtos::delay_ms(20);
-    rst_drv.set_low()?;
-    FreeRtos::delay_ms(20);
-    rst_drv.set_high()?;
-    FreeRtos::delay_ms(150);
+    let mut rst_drv = PinDriver::output(rst)?;
+    rst_drv.set_high()?; FreeRtos::delay_ms(20);
+    rst_drv.set_low()?;  FreeRtos::delay_ms(20);
+    rst_drv.set_high()?; FreeRtos::delay_ms(150);
+    core::mem::forget(rst_drv);
 
     info!("display: starting SPI");
     let spi_dev = SpiDeviceDriver::new_single(
-        spi,
-        sclk,
-        mosi,
+        spi, sclk, mosi,
         Option::<AnyIOPin>::None,
         Some(cs),
-        &SpiDriverConfig::new(),
-        &SpiConfig::new().baudrate(4.MHz().into()),
+        &SpiDriverConfig::new().dma(Dma::Auto(SPI_DMA_BUF_BYTES)),
+        // polling(false) = interrupt-driven: thread sleeps during 5ms DMA flush,
+        // allowing FreeRTOS IDLE to run and reset the Task Watchdog Timer.
+        &SpiConfig::new().baudrate(SPI_FREQ_MHZ.MHz().into()).polling(false),
     )?;
+    let dc_drv = PinDriver::output(dc)?;
 
-    info!("display: constructing ST7735");
-    let mut display = ST7735::new(
-        spi_dev,
-        dc_drv,
-        rst_drv,
-        false,
-        false,
-        PANEL_WIDTH as u32,
-        PANEL_HEIGHT as u32,
-    );
+    info!("display: initialising panel");
+    let mut raw = RawST7735 { spi: spi_dev, dc: dc_drv };
+    raw.init();
+    raw.set_full_frame_window();
+    raw.fill_solid(0x0000); // clear to black
 
-    let mut delay = Ets;
+    let shared: SharedDisplay = Arc::new(Mutex::new(Box::new(raw)));
+    let mode: SharedMode = Arc::new(AtomicU8::new(MODE_BASIC));
 
-    display
-        .init(&mut delay)
-        .map_err(|_| anyhow::anyhow!("ST7735S init failed"))?;
+    basic::register(server, shared.clone(), mode.clone())?;
+    renderer::register(server, shared.clone(), mode.clone())?;
 
-    display
-        .set_orientation(&Orientation::Landscape)
-        .map_err(|_| anyhow::anyhow!("ST7735S set_orientation failed"))?;
-
-    display.set_offset(OFFSET_X, OFFSET_Y);
-    display
-        .clear(Rgb565::BLACK)
-        .map_err(|_| anyhow::anyhow!("display clear failed"))?;
-
-    let display = Arc::new(Mutex::new(display));
-
+    // Mode switch: GET /api/display/mode?set=basic|renderer
     {
-        let display = display.clone();
-
+        let mode = mode.clone();
         server.fn_handler(
-            "/api/display/text",
+            "/api/display/mode",
             esp_idf_svc::http::Method::Get,
             move |req| {
-                // Parse `msg` and `color` query params, clear the display, and draw the
-                // requested text centered vertically using FONT_10X20.
                 let uri = req.uri().to_string();
-
-                let msg = query_param(&uri, "msg")
-                    .map(percent_decode)
-                    .unwrap_or_else(|| "Hello".to_string());
-
-                let color = query_param(&uri, "color")
-                    .map(parse_hex_color)
-                    .unwrap_or(Rgb565::WHITE);
-
-                let mut display = display.lock().unwrap();
-
-                display
-                    .clear(Rgb565::BLACK)
-                    .map_err(|_| anyhow::anyhow!("display clear failed"))?;
-
-                let style = MonoTextStyle::new(&FONT_10X20, color);
-
-                Text::with_baseline(&msg, Point::new(4, 36), style, Baseline::Middle)
-                    .draw(&mut *display)
-                    .map_err(|_| anyhow::anyhow!("display text draw failed"))?;
-
-                let mut response =
-                    req.into_response(200, Some("OK"), &[("Content-Type", "application/json")])?;
-                response.write(br#"{"ok":true}"#)?;
-
+                let set = uri.split('?').nth(1)
+                    .and_then(|q| q.split('&').find(|p| p.starts_with("set=")))
+                    .and_then(|p| p.strip_prefix("set="))
+                    .unwrap_or("basic");
+                let new_mode = if set == "renderer" { MODE_RENDERER } else { MODE_BASIC };
+                mode.store(new_mode, Ordering::Relaxed);
+                let json: &[u8] = if new_mode == MODE_RENDERER {
+                    br#"{"mode":"renderer"}"#
+                } else {
+                    br#"{"mode":"basic"}"#
+                };
+                let mut resp = req.into_response(
+                    200, Some("OK"), &[("Content-Type", "application/json")],
+                )?;
+                resp.write(json)?;
                 Ok::<(), anyhow::Error>(())
             },
         )?;
     }
 
-    {
-        let display = display.clone();
+    info!("display module ready");
 
-        server.fn_handler(
-            "/api/display/clear",
-            esp_idf_svc::http::Method::Get,
-            move |req| {
-                // Parse optional `color` query param (defaults to black) and fill
-                // the entire display with that color.
-                let uri = req.uri().to_string();
-
-                let color = query_param(&uri, "color")
-                    .map(parse_hex_color)
-                    .unwrap_or(Rgb565::BLACK);
-
-                let mut display = display.lock().unwrap();
-
-                display
-                    .clear(color)
-                    .map_err(|_| anyhow::anyhow!("display clear failed"))?;
-
-                let mut response =
-                    req.into_response(200, Some("OK"), &[("Content-Type", "application/json")])?;
-                response.write(br#"{"ok":true}"#)?;
-
-                Ok::<(), anyhow::Error>(())
-            },
-        )?;
-    }
-
-    info!("ST7735S display initialised");
-
-    Ok(CARD_HTML.to_string())
+    // Inject submodule HTML fragments at compile time.
+    let card = CARD_HTML
+        .replace("{{BASIC_CARD}}", basic::CARD_HTML)
+        .replace("{{RENDERER_CARD}}", renderer::CARD_HTML);
+    Ok(card)
 }

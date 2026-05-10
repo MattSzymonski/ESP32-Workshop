@@ -1,0 +1,28 @@
+<label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+    <div id="rend-toggle" onclick="rendToggle()"
+        style="position:relative;width:44px;height:24px;border-radius:12px;background:#e8703a;transition:background .2s;flex-shrink:0;">
+        <div id="rend-knob"
+            style="position:absolute;top:3px;left:23px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s;">
+        </div>
+    </div>
+    <span id="rend-label">Running</span>
+</label>
+<p id="rend-status" class="status"></p>
+<script>
+    var rendRunning = true;
+    function rendSetVisual(on) {
+        document.getElementById('rend-toggle').style.background = on ? '#e8703a' : '#444';
+        document.getElementById('rend-knob').style.left = on ? '23px' : '3px';
+        document.getElementById('rend-label').textContent = on ? 'Running' : 'Stopped';
+    }
+    async function rendToggle() {
+        var s = document.getElementById('rend-status');
+        var next = !rendRunning;
+        s.textContent = next ? 'Starting\u2026' : 'Stopping\u2026';
+        var data = await fetch('/api/display/renderer/' + (next ? 'start' : 'stop')).then(r => r.json());
+        rendRunning = data.running;
+        rendSetVisual(rendRunning);
+        s.textContent = '';
+    }
+    rendSetVisual(true);
+</script>
