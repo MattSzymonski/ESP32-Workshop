@@ -18,7 +18,7 @@ use embedded_hal::spi::SpiDevice;
 use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::gpio::{AnyIOPin, OutputPin as EspOutputPin, PinDriver};
 use esp_idf_svc::hal::spi::config::{Config as SpiConfig, DriverConfig as SpiDriverConfig};
-use esp_idf_svc::hal::spi::{SpiAnyPins, SpiDeviceDriver};
+use esp_idf_svc::hal::spi::{Dma, SpiAnyPins, SpiDeviceDriver};
 use esp_idf_svc::hal::units::FromValueType;
 use esp_idf_svc::http::server::EspHttpServer;
 use log::info;
@@ -39,6 +39,22 @@ const fn rgb565(r: u8, g: u8, b: u8) -> u16 {
 }
 const ORANGE: u16 = rgb565(255, 133, 89); // #FF8559 accent
 const DIM: u16 = rgb565(80, 40, 20); // dimmer orange for back edges
+
+// ─── SPI / hardware config ────────────────────────────────────────────────────
+const SPI_FREQ_MHZ: u32 = 40; // SPI clock (ST7735S rated 15.1 MHz, tolerates higher)
+const SPI_DMA_BUF_BYTES: usize = FB_BYTES.next_power_of_two(); // DMA buffer must be power-of-two and >= FB_BYTES
+const DISPLAY_Y_OFFSET: u16 = 24; // physical ST7735S panel Y address offset
+
+// ─── 3-D scene config ─────────────────────────────────────────────────────────
+const FOV_RAD: f32 = core::f32::consts::PI / 3.0; // 60° vertical field of view
+const CAMERA_Z: f32 = 2.0; // camera distance from origin (pushed into screen)
+const NEAR_PLANE: f32 = 0.1;
+const FAR_PLANE: f32 = 100.0;
+
+// ─── animation config ─────────────────────────────────────────────────────────
+const ANGLE_SPEED_X: f32 = 0.03; // radians per frame
+const ANGLE_SPEED_Y: f32 = 0.05;
+const ANGLE_SPEED_Z: f32 = 0.02;
 
 // ─── 3-D maths ────────────────────────────────────────────────────────────────
 
@@ -257,9 +273,17 @@ fn draw_line(fb: &mut [u8; FB_BYTES], mut x0: i32, mut y0: i32, x1: i32, y1: i32
 
 // ─── render one frame ─────────────────────────────────────────────────────────
 
-fn render_frame(fb: &mut [u8; FB_BYTES], angle_x: f32, angle_y: f32, angle_z: f32) {
+fn render_frame(
+    fb: &mut [u8; FB_BYTES],
+    angle_x: f32,
+    angle_y: f32,
+    angle_z: f32,
+) -> (u64, u64, u64) // returns (clear_us, mvp_us, raster_us)
+{
     // 1. Clear framebuffer (black = 0x0000 → both bytes zero)
+    let t_clear = std::time::Instant::now();
     fb.fill(0);
+    let clear_us = t_clear.elapsed().as_micros() as u64;
 
     // 2. Build MVP matrix
     //    Model: rotate
@@ -267,18 +291,14 @@ fn render_frame(fb: &mut [u8; FB_BYTES], angle_x: f32, angle_y: f32, angle_z: f3
         .mul(&Mat4::rotation_y(angle_y))
         .mul(&Mat4::rotation_z(angle_z));
 
-    //    View: push the cube 2.0 units into the screen
-    let view = Mat4::translation(0.0, 0.0, -2.0);
+    //    View: push the cube back from the camera
+    let view = Mat4::translation(0.0, 0.0, -CAMERA_Z);
 
-    //    Projection: 60° FOV, landscape aspect ratio
-    let proj = Mat4::perspective(
-        core::f32::consts::PI / 3.0, // 60°
-        W as f32 / H as f32,
-        0.1,
-        100.0,
-    );
+    //    Projection
+    let proj = Mat4::perspective(FOV_RAD, W as f32 / H as f32, NEAR_PLANE, FAR_PLANE);
 
     let mvp = proj.mul(&view).mul(&model);
+    let mvp_us = t_clear.elapsed().as_micros() as u64 - clear_us;
 
     // 3. Transform all 8 vertices through MVP → NDC → screen space
     let half_w = (W as f32) * 0.5;
@@ -305,6 +325,7 @@ fn render_frame(fb: &mut [u8; FB_BYTES], angle_x: f32, angle_y: f32, angle_z: f3
     });
 
     // 4. Draw edges — front (w>0) in bright orange, back in dim orange
+    let t_raster = std::time::Instant::now();
     for &(a, b) in &CUBE_EDGES {
         let avg_w = (screen[a].2 + screen[b].2) * 0.5;
         let color = if avg_w > 0.0 { ORANGE } else { DIM };
@@ -317,6 +338,7 @@ fn render_frame(fb: &mut [u8; FB_BYTES], angle_x: f32, angle_y: f32, angle_z: f3
             color,
         );
     }
+    (clear_us, mvp_us, t_raster.elapsed().as_micros() as u64)
 }
 
 // ─── minimal raw ST7735S driver ───────────────────────────────────────────────
@@ -368,13 +390,12 @@ impl<S: SpiDevice, DC: OutputPin> RawST7735<S, DC> {
         FreeRtos::delay_ms(200);
     }
 
-    /// Set the ST7735S address window. dy=24 is the physical Y offset of this panel.
+    /// Set the ST7735S address window using the panel's physical Y offset.
     fn set_full_frame_window(&mut self) {
-        const DY: u16 = 24;
         const EX: u16 = (W - 1) as u16;
-        const EY: u16 = (H - 1) as u16 + DY;
+        const EY: u16 = (H - 1) as u16 + DISPLAY_Y_OFFSET;
         self.cmd_data(0x2A, &[0, 0, 0, EX as u8]); // CASET: 0..159
-        self.cmd_data(0x2B, &[0, DY as u8, 0, EY as u8]); // RASET: 24..103
+        self.cmd_data(0x2B, &[0, DISPLAY_Y_OFFSET as u8, 0, EY as u8]); // RASET
     }
 
     /// Flush the pre-formatted big-endian RGB565 byte framebuffer in ONE SPI transaction.
@@ -383,6 +404,19 @@ impl<S: SpiDevice, DC: OutputPin> RawST7735<S, DC> {
         self.cmd(0x2C); // RAMWR
         let _ = self.dc.set_high();
         let _ = self.spi.write(fb); // single write of all 25,600 bytes
+    }
+
+    /// Returns (cmd_us, data_us): time for RAMWR command vs pure pixel data transfer.
+    fn flush_frame_timed(&mut self, fb: &[u8; FB_BYTES]) -> (u64, u64) {
+        let t0 = std::time::Instant::now();
+        let _ = self.dc.set_low();
+        let _ = self.spi.write(&[0x2C]); // RAMWR command byte
+        let cmd_us = t0.elapsed().as_micros() as u64;
+        let t1 = std::time::Instant::now();
+        let _ = self.dc.set_high();
+        let _ = self.spi.write(fb);
+        let data_us = t1.elapsed().as_micros() as u64;
+        (cmd_us, data_us)
     }
 }
 
@@ -426,8 +460,16 @@ where
         mosi,
         Option::<AnyIOPin>::None,
         Some(cs),
-        &SpiDriverConfig::new(),
-        &SpiConfig::new().baudrate(24.MHz().into()),
+        // DMA::Auto lets the ESP32 DMA controller handle the SPI transfer autonomously,
+        // freeing the CPU from busy-polling for the entire flush duration.
+        // Buffer size must be >= FB_BYTES (25,600). Round up to next power-of-two.
+        &SpiDriverConfig::new().dma(Dma::Auto(SPI_DMA_BUF_BYTES)),
+        // polling(false) = interrupt-driven completion: the thread sleeps during the
+        // SPI transfer so FreeRTOS IDLE can run and reset the Task Watchdog Timer.
+        // polling(true) = CPU busy-spins in spi_device_polling_end for ~5ms → TWDT.
+        &SpiConfig::new()
+            .baudrate(SPI_FREQ_MHZ.MHz().into())
+            .polling(false),
     )?;
 
     let dc_drv = PinDriver::output(dc)?;
@@ -451,57 +493,94 @@ where
     std::thread::Builder::new()
         .stack_size(8192)
         .spawn(move || {
-            // Allocate the byte framebuffer on the heap to avoid blowing the stack.
-            // Layout: [pixel0_hi, pixel0_lo, pixel1_hi, pixel1_lo, ...] big-endian RGB565.
-            let mut fb: Box<[u8; FB_BYTES]> = Box::new([0u8; FB_BYTES]);
+            // Double-buffer: while fb_back is being sent to the display (DMA), the CPU
+            // renders the next frame into fb_front. Then the two are swapped.
+            // Both allocated on the heap to avoid blowing the 8 KB stack.
+            let mut fb_front: Box<[u8; FB_BYTES]> = Box::new([0u8; FB_BYTES]);
+            let mut fb_back: Box<[u8; FB_BYTES]> = Box::new([0u8; FB_BYTES]);
             let mut angle_x: f32 = 0.0;
             let mut angle_y: f32 = 0.0;
             let mut angle_z: f32 = 0.0;
 
-            info!("renderer: render loop started");
+            info!("renderer: render loop started (DMA + double-buffer)");
 
             let mut frame_count: u32 = 0;
             let mut fps_timer = std::time::Instant::now();
 
             // Accumulators for per-section timing (microseconds)
-            let mut t_render_us: u64 = 0;
-            let mut t_flush_us: u64 = 0;
+            let mut t_clear_us: u64 = 0;
+            let mut t_mvp_us: u64 = 0;
+            let mut t_raster_us: u64 = 0;
+            let mut t_flush_cmd_us: u64 = 0;
+            let mut t_flush_data_us: u64 = 0;
             let mut t_total_us: u64 = 0;
+            let mut t_min_us: u64 = u64::MAX;
+            let mut t_max_us: u64 = 0;
+
+            info!(
+                "renderer: SPI theoretical min flush = {:.2}ms at {}MHz",
+                (FB_BYTES as f32 * 8.0) / (SPI_FREQ_MHZ as f32 * 1_000_000.0) * 1000.0,
+                SPI_FREQ_MHZ,
+            );
+
+            // Flush a black frame first.
+            raw.flush_frame(&fb_front);
 
             loop {
                 if !running_thread.load(Ordering::Relaxed) {
-                    // Clear screen and wait
-                    fb.fill(0);
-                    raw.flush_frame(&fb);
+                    fb_front.fill(0);
+                    raw.flush_frame(&fb_front);
                     frame_count = 0;
                     fps_timer = std::time::Instant::now();
-                    t_render_us = 0;
-                    t_flush_us = 0;
+                    t_clear_us = 0;
+                    t_mvp_us = 0;
+                    t_raster_us = 0;
+                    t_flush_cmd_us = 0;
+                    t_flush_data_us = 0;
                     t_total_us = 0;
-                    // Sleep until started again
+                    t_min_us = u64::MAX;
+                    t_max_us = 0;
                     while !running_thread.load(Ordering::Relaxed) {
                         FreeRtos::delay_ms(100);
                     }
-                    // Restore address window after stop/start cycle
                     raw.set_full_frame_window();
                 }
 
                 let t_frame_start = std::time::Instant::now();
 
-                // ── render (CPU: clear fb + MVP + rasterize) ──────────────────
-                let t0 = std::time::Instant::now();
-                render_frame(&mut fb, angle_x, angle_y, angle_z);
-                t_render_us += t0.elapsed().as_micros() as u64;
+                // Kick off the DMA flush of the previously rendered buffer (fb_back)
+                // then immediately render the next frame into fb_front — these overlap.
+                let _t_flush_start = std::time::Instant::now();
+                // (flush is blocking even with DMA in esp-idf-svc's embedded-hal impl,
+                //  but with DMA the CPU is not busy-spinning — the kernel blocks the
+                //  thread and lets other tasks run, eliminating the TWDT trigger.)
+                let flush_fb = &*fb_back as *const [u8; FB_BYTES];
 
-                // ── flush (single SPI write of entire framebuffer) ────────────
-                let t1 = std::time::Instant::now();
-                raw.flush_frame(&fb);
-                t_flush_us += t1.elapsed().as_micros() as u64;
+                // ── render into front buffer (overlaps with DMA flush below) ──
+                let (clear_us, mvp_us, raster_us) =
+                    render_frame(&mut fb_front, angle_x, angle_y, angle_z);
+                t_clear_us += clear_us;
+                t_mvp_us += mvp_us;
+                t_raster_us += raster_us;
 
-                // Yield to FreeRTOS IDLE so the Task Watchdog gets reset.
-                FreeRtos::delay_ms(1);
+                // ── flush back buffer (DMA transfer) ──────────────────────────
+                // Safety: flush_fb points to fb_back which is only accessed here
+                // while fb_front is being written by render_frame above. No aliasing.
+                let (cmd_us, data_us) = raw.flush_frame_timed(unsafe { &*flush_fb });
+                t_flush_cmd_us += cmd_us;
+                t_flush_data_us += data_us;
 
-                t_total_us += t_frame_start.elapsed().as_micros() as u64;
+                // Swap buffers: rendered front becomes the next flush target.
+                core::mem::swap(&mut fb_front, &mut fb_back);
+
+                let frame_us = t_frame_start.elapsed().as_micros() as u64;
+                t_total_us += frame_us;
+                if frame_us < t_min_us {
+                    t_min_us = frame_us;
+                }
+                if frame_us > t_max_us {
+                    t_max_us = frame_us;
+                }
                 frame_count += 1;
 
                 let elapsed = fps_timer.elapsed();
@@ -509,25 +588,34 @@ where
                     let fps = frame_count as f32 / elapsed.as_secs_f32();
                     let n = frame_count.max(1) as u64;
                     info!(
-                        "renderer: {:.1} fps | render={:.1}ms  flush={:.1}ms  total={:.1}ms",
+                        "renderer: {:.1} fps total={:.2}ms | \
+                        clear={:.2}ms mvp={:.2}ms raster={:.2}ms | \
+                        flush_cmd={:.2}ms flush_data={:.2}ms flush={:.2}ms",
                         fps,
-                        (t_render_us / n) as f32 / 1000.0,
-                        (t_flush_us / n) as f32 / 1000.0,
                         (t_total_us / n) as f32 / 1000.0,
+                        (t_clear_us / n) as f32 / 1000.0,
+                        (t_mvp_us / n) as f32 / 1000.0,
+                        (t_raster_us / n) as f32 / 1000.0,
+                        (t_flush_cmd_us / n) as f32 / 1000.0,
+                        (t_flush_data_us / n) as f32 / 1000.0,
+                        (t_flush_cmd_us + t_flush_data_us) as f32 / n as f32 / 1000.0,
                     );
                     frame_count = 0;
                     fps_timer = std::time::Instant::now();
-                    t_render_us = 0;
-                    t_flush_us = 0;
+                    t_clear_us = 0;
+                    t_mvp_us = 0;
+                    t_raster_us = 0;
+                    t_flush_cmd_us = 0;
+                    t_flush_data_us = 0;
                     t_total_us = 0;
+                    t_min_us = u64::MAX;
+                    t_max_us = 0;
                 }
 
                 // Advance rotation angles
-                angle_x += 0.03;
-                angle_y += 0.05;
-                angle_z += 0.02;
-
-                // Wrap to avoid float drift
+                angle_x += ANGLE_SPEED_X;
+                angle_y += ANGLE_SPEED_Y;
+                angle_z += ANGLE_SPEED_Z;
                 let two_pi = core::f32::consts::PI * 2.0;
                 if angle_x > two_pi {
                     angle_x -= two_pi;
