@@ -1,12 +1,17 @@
 <div class="module-card">
     <h2>ST7735S Display</h2>
     <p>0.96&quot; 80&times;160 RGB IPS on SPI2</p>
-    <input type="text" id="disp-text" placeholder="Hello ESP32" maxlength="18"
-        style="width:100%;padding:0.4rem;border-radius:0.4rem;border:none;background:#4b5563;color:#f9fafb;box-sizing:border-box;">
-    <input type="color" id="disp-color" value="#ffffff" title="Text color"
-        style="width:3rem;height:2rem;border:none;border-radius:0.4rem;cursor:pointer;background:none;">
-    <button onclick="sendText()">Send</button>
-    <button onclick="clearDisp()" style="background:#374151">Clear</button>
+    <div style="display:flex;gap:8px;width:100%;align-items:center;">
+        <input type="text" id="disp-text" placeholder="Hello ESP32" maxlength="18"
+            style="flex:1;padding:0.4rem 0.6rem;border:1px solid rgba(255,255,255,0.07);border-radius:8px;background:#1e1e1e;color:#e4e4e4;font-size:13px;box-sizing:border-box;outline:none;">
+        <input type="color" id="disp-color" value="#ffffff" title="Text color"
+            style="width:36px;height:36px;border:1px solid rgba(255,255,255,0.07);border-radius:8px;cursor:pointer;background:#1e1e1e;padding:2px;flex-shrink:0;">
+    </div>
+    <div style="display:flex;gap:8px;">
+        <button onclick="sendText()">Send</button>
+        <button onclick="clearDisp()"
+            style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:#888;">Clear</button>
+    </div>
     <p id="disp-status" class="status"></p>
     <script>
         async function sendText() {

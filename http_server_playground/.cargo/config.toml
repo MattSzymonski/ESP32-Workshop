@@ -4,7 +4,7 @@ linker = "ldproxy"
 [build]
 target = "riscv32imac-esp-espidf"
 # Relocate cargo output to a short path to avoid Windows MAX_PATH issues.
-target-dir = "C:\\esp\\target\\http_server_tools"
+target-dir = "D:\\cargo-target\\http_server_playground"
 
 [unstable]
 build-std = ["std", "panic_abort"]

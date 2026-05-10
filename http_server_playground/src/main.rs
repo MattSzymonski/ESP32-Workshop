@@ -88,6 +88,10 @@ fn main() -> anyhow::Result<()> {
     wifi.start()?;
     info!("WiFi started");
 
+    // Give the router time to expire any stale association from a previous run,
+    // reducing the number of AUTH_EXPIRE retries on fast restarts.
+    std::thread::sleep(Duration::from_millis(500));
+
     // 7. Attempt connection with automatic retry.
     //    The router can reject the first attempt with AUTH_EXPIRE when it still holds
     //    stale state from a previous run, so we loop until both the association and
