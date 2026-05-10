@@ -2,26 +2,26 @@
 //
 // Architecture:
 //   - All maths runs in f32 on the CPU (no FPU on ESP32-C6, emulated in SW).
-//   - A preallocated [u16; W*H] framebuffer holds RGB565 pixels.
+//   - A preallocated [u8; W*H*2] framebuffer holds big-endian RGB565 bytes.
+//     Writing to it pre-formatted means the flush is a single spi.write() call.
 //   - Every frame: clear fb → transform cube vertices → project → rasterize edges
-//     → flush the whole fb to the display via a single SPI write_frame call.
+//     → flush the whole fb to the display in ONE SPI transaction.
 //   - The render loop runs on a dedicated FreeRTOS thread (std::thread::spawn)
 //     so it never blocks the HTTP server.
 //   - An Arc<AtomicBool> lets the HTTP endpoint start/stop the loop.
 //
-// Display geometry (landscape, matches display::mod.rs):
-//   Width=160, Height=80, offset=(0,24) — those are physical ST7735S address offsets
-//   and are already handled by the driver; here we just use W=160, H=80.
+// Display geometry (landscape):
+//   Width=160, Height=80, Y-offset=24 (physical ST7735S address offset).
 
-use esp_idf_svc::hal::delay::Ets;
+use embedded_hal::digital::OutputPin;
+use embedded_hal::spi::SpiDevice;
 use esp_idf_svc::hal::delay::FreeRtos;
-use esp_idf_svc::hal::gpio::{AnyIOPin, OutputPin, PinDriver};
+use esp_idf_svc::hal::gpio::{AnyIOPin, OutputPin as EspOutputPin, PinDriver};
 use esp_idf_svc::hal::spi::config::{Config as SpiConfig, DriverConfig as SpiDriverConfig};
 use esp_idf_svc::hal::spi::{SpiAnyPins, SpiDeviceDriver};
 use esp_idf_svc::hal::units::FromValueType;
 use esp_idf_svc::http::server::EspHttpServer;
 use log::info;
-use st7735_lcd::{Orientation, ST7735};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -31,15 +31,14 @@ const CARD_HTML: &str = include_str!("card.html");
 const W: usize = 160;
 const H: usize = 80;
 const PIXELS: usize = W * H;
+const FB_BYTES: usize = PIXELS * 2; // big-endian RGB565: 2 bytes per pixel
 
-// ─── colours (RGB565 big-endian) ─────────────────────────────────────────────
-const BLACK: u16 = 0x0000;
-const ORANGE: u16 = rgb565(255, 133, 89); // #FF8559 accent
-const DIM: u16 = rgb565(80, 40, 20); // dimmer orange for back edges
-
+// ─── colours (RGB565) ─────────────────────────────────────────────────────────
 const fn rgb565(r: u8, g: u8, b: u8) -> u16 {
     (((r as u16) & 0xF8) << 8) | (((g as u16) & 0xFC) << 3) | ((b as u16) >> 3)
 }
+const ORANGE: u16 = rgb565(255, 133, 89); // #FF8559 accent
+const DIM: u16 = rgb565(80, 40, 20); // dimmer orange for back edges
 
 // ─── 3-D maths ────────────────────────────────────────────────────────────────
 
@@ -221,8 +220,16 @@ const CUBE_EDGES: [(usize, usize); 12] = [
 
 // ─── software rasterizer ─────────────────────────────────────────────────────
 
-// Bresenham line into a flat RGB565 framebuffer
-fn draw_line(fb: &mut [u16; PIXELS], mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: u16) {
+// Write a single pixel into the big-endian byte framebuffer.
+#[inline(always)]
+fn put_pixel(fb: &mut [u8; FB_BYTES], x: usize, y: usize, color: u16) {
+    let idx = (y * W + x) * 2;
+    fb[idx] = (color >> 8) as u8;
+    fb[idx + 1] = color as u8;
+}
+
+// Bresenham line into a flat big-endian RGB565 byte framebuffer.
+fn draw_line(fb: &mut [u8; FB_BYTES], mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: u16) {
     let dx = (x1 - x0).abs();
     let dy = -(y1 - y0).abs();
     let sx: i32 = if x0 < x1 { 1 } else { -1 };
@@ -231,7 +238,7 @@ fn draw_line(fb: &mut [u16; PIXELS], mut x0: i32, mut y0: i32, x1: i32, y1: i32,
 
     loop {
         if x0 >= 0 && x0 < W as i32 && y0 >= 0 && y0 < H as i32 {
-            fb[y0 as usize * W + x0 as usize] = color;
+            put_pixel(fb, x0 as usize, y0 as usize, color);
         }
         if x0 == x1 && y0 == y1 {
             break;
@@ -250,9 +257,9 @@ fn draw_line(fb: &mut [u16; PIXELS], mut x0: i32, mut y0: i32, x1: i32, y1: i32,
 
 // ─── render one frame ─────────────────────────────────────────────────────────
 
-fn render_frame(fb: &mut [u16; PIXELS], angle_x: f32, angle_y: f32, angle_z: f32) {
-    // 1. Clear framebuffer
-    fb.fill(BLACK);
+fn render_frame(fb: &mut [u8; FB_BYTES], angle_x: f32, angle_y: f32, angle_z: f32) {
+    // 1. Clear framebuffer (black = 0x0000 → both bytes zero)
+    fb.fill(0);
 
     // 2. Build MVP matrix
     //    Model: rotate
@@ -297,12 +304,10 @@ fn render_frame(fb: &mut [u16; PIXELS], angle_x: f32, angle_y: f32, angle_z: f32
         (px, py, clip.w)
     });
 
-    // 4. Draw edges — front (z>0) in bright orange, back in dim orange
+    // 4. Draw edges — front (w>0) in bright orange, back in dim orange
     for &(a, b) in &CUBE_EDGES {
-        // Use average clip-space w to decide front/back
         let avg_w = (screen[a].2 + screen[b].2) * 0.5;
         let color = if avg_w > 0.0 { ORANGE } else { DIM };
-
         draw_line(
             fb,
             screen[a].0,
@@ -314,16 +319,83 @@ fn render_frame(fb: &mut [u16; PIXELS], angle_x: f32, angle_y: f32, angle_z: f32
     }
 }
 
+// ─── minimal raw ST7735S driver ───────────────────────────────────────────────
+//
+// Owns the SPI device and DC pin directly so it can flush the entire framebuffer
+// in a single spi.write() call instead of 800 small transactions.
+
+struct RawST7735<S, DC> {
+    spi: S,
+    dc: DC,
+}
+
+impl<S: SpiDevice, DC: OutputPin> RawST7735<S, DC> {
+    fn cmd(&mut self, cmd: u8) {
+        let _ = self.dc.set_low();
+        let _ = self.spi.write(&[cmd]);
+    }
+
+    fn data(&mut self, data: &[u8]) {
+        let _ = self.dc.set_high();
+        let _ = self.spi.write(data);
+    }
+
+    fn cmd_data(&mut self, cmd: u8, data: &[u8]) {
+        self.cmd(cmd);
+        self.data(data);
+    }
+
+    /// Full ST7735S init sequence (matches st7735-lcd crate: rgb=false, inverted=false, landscape).
+    fn init(&mut self) {
+        self.cmd(0x01); // SWRESET
+        FreeRtos::delay_ms(200);
+        self.cmd(0x11); // SLPOUT
+        FreeRtos::delay_ms(200);
+        self.cmd_data(0xB1, &[0x01, 0x2C, 0x2D]); // FRMCTR1
+        self.cmd_data(0xB2, &[0x01, 0x2C, 0x2D]); // FRMCTR2
+        self.cmd_data(0xB3, &[0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D]); // FRMCTR3
+        self.cmd_data(0xB4, &[0x07]); // INVCTR
+        self.cmd_data(0xC0, &[0xA2, 0x02, 0x84]); // PWCTR1
+        self.cmd_data(0xC1, &[0xC5]); // PWCTR2
+        self.cmd_data(0xC2, &[0x0A, 0x00]); // PWCTR3
+        self.cmd_data(0xC3, &[0x8A, 0x2A]); // PWCTR4
+        self.cmd_data(0xC4, &[0x8A, 0xEE]); // PWCTR5
+        self.cmd_data(0xC5, &[0x0E]); // VMCTR1
+        self.cmd(0x20); // INVOFF
+        self.cmd_data(0x3A, &[0x05]); // COLMOD: RGB565
+        self.cmd_data(0x36, &[0x68]); // MADCTL: landscape + BGR
+        self.cmd(0x29); // DISPON
+        FreeRtos::delay_ms(200);
+    }
+
+    /// Set the ST7735S address window. dy=24 is the physical Y offset of this panel.
+    fn set_full_frame_window(&mut self) {
+        const DY: u16 = 24;
+        const EX: u16 = (W - 1) as u16;
+        const EY: u16 = (H - 1) as u16 + DY;
+        self.cmd_data(0x2A, &[0, 0, 0, EX as u8]); // CASET: 0..159
+        self.cmd_data(0x2B, &[0, DY as u8, 0, EY as u8]); // RASET: 24..103
+    }
+
+    /// Flush the pre-formatted big-endian RGB565 byte framebuffer in ONE SPI transaction.
+    /// This avoids the 800 small transactions that write_words_buffered(32-byte chunks) does.
+    fn flush_frame(&mut self, fb: &[u8; FB_BYTES]) {
+        self.cmd(0x2C); // RAMWR
+        let _ = self.dc.set_high();
+        let _ = self.spi.write(fb); // single write of all 25,600 bytes
+    }
+}
+
 // ─── public entry point ───────────────────────────────────────────────────────
 
-/// Initialises the ST7735S on SPI2, starts a background render loop, and registers
+/// Initialises the ST7735S on SPI, starts a background render loop, and registers
 /// HTTP endpoints to start/stop the renderer.
 /// Returns the HTML card string to embed in the dashboard.
 pub fn register<SPI>(
     server: &mut EspHttpServer,
     spi: SPI,
-    sclk: impl OutputPin + 'static,
-    mosi: impl OutputPin + 'static,
+    sclk: impl EspOutputPin + 'static,
+    mosi: impl EspOutputPin + 'static,
     cs: AnyIOPin<'static>,
     dc: AnyIOPin<'static>,
     rst: AnyIOPin<'static>,
@@ -337,17 +409,15 @@ where
     bl_drv.set_high()?;
     core::mem::forget(bl_drv);
 
-    info!("renderer: configuring DC and RST pins");
-    let dc_drv = PinDriver::output(dc)?;
+    info!("renderer: hardware reset via RST pin");
     let mut rst_drv = PinDriver::output(rst)?;
-
-    info!("renderer: hardware reset");
     rst_drv.set_high()?;
     FreeRtos::delay_ms(20);
     rst_drv.set_low()?;
     FreeRtos::delay_ms(20);
     rst_drv.set_high()?;
     FreeRtos::delay_ms(150);
+    core::mem::forget(rst_drv); // keep RST high
 
     info!("renderer: starting SPI");
     let spi_dev = SpiDeviceDriver::new_single(
@@ -357,20 +427,18 @@ where
         Option::<AnyIOPin>::None,
         Some(cs),
         &SpiDriverConfig::new(),
-        &SpiConfig::new().baudrate(16.MHz().into()),
+        &SpiConfig::new().baudrate(24.MHz().into()),
     )?;
 
-    info!("renderer: constructing ST7735");
-    let mut display = ST7735::new(spi_dev, dc_drv, rst_drv, false, false, W as u32, H as u32);
+    let dc_drv = PinDriver::output(dc)?;
 
-    let mut delay = Ets;
-    display
-        .init(&mut delay)
-        .map_err(|_| anyhow::anyhow!("ST7735S init failed"))?;
-    display
-        .set_orientation(&Orientation::Landscape)
-        .map_err(|_| anyhow::anyhow!("orientation failed"))?;
-    display.set_offset(0, 24);
+    info!("renderer: initialising display");
+    let mut raw = RawST7735 {
+        spi: spi_dev,
+        dc: dc_drv,
+    };
+    raw.init();
+    raw.set_full_frame_window();
 
     info!("renderer: spawning render thread");
 
@@ -383,8 +451,9 @@ where
     std::thread::Builder::new()
         .stack_size(8192)
         .spawn(move || {
-            // Allocate the framebuffer on the heap to avoid blowing the stack.
-            let mut fb: Box<[u16; PIXELS]> = Box::new([BLACK; PIXELS]);
+            // Allocate the byte framebuffer on the heap to avoid blowing the stack.
+            // Layout: [pixel0_hi, pixel0_lo, pixel1_hi, pixel1_lo, ...] big-endian RGB565.
+            let mut fb: Box<[u8; FB_BYTES]> = Box::new([0u8; FB_BYTES]);
             let mut angle_x: f32 = 0.0;
             let mut angle_y: f32 = 0.0;
             let mut angle_z: f32 = 0.0;
@@ -399,15 +468,11 @@ where
             let mut t_flush_us: u64 = 0;
             let mut t_total_us: u64 = 0;
 
-            // Set the address window once for the full screen — write_pixels_buffered
-            // reuses it every frame, skipping repeated set_address_window SPI commands.
-            let _ = display.set_address_window(0, 0, (W - 1) as u16, (H - 1) as u16);
-
             loop {
                 if !running_thread.load(Ordering::Relaxed) {
                     // Clear screen and wait
-                    fb.fill(BLACK);
-                    let _ = display.write_pixels_buffered(fb.iter().copied());
+                    fb.fill(0);
+                    raw.flush_frame(&fb);
                     frame_count = 0;
                     fps_timer = std::time::Instant::now();
                     t_render_us = 0;
@@ -418,7 +483,7 @@ where
                         FreeRtos::delay_ms(100);
                     }
                     // Restore address window after stop/start cycle
-                    let _ = display.set_address_window(0, 0, (W - 1) as u16, (H - 1) as u16);
+                    raw.set_full_frame_window();
                 }
 
                 let t_frame_start = std::time::Instant::now();
@@ -428,14 +493,12 @@ where
                 render_frame(&mut fb, angle_x, angle_y, angle_z);
                 t_render_us += t0.elapsed().as_micros() as u64;
 
-                // ── flush (SPI transfer to display) ───────────────────────────
+                // ── flush (single SPI write of entire framebuffer) ────────────
                 let t1 = std::time::Instant::now();
-                let _ = display.write_pixels_buffered(fb.iter().copied());
+                raw.flush_frame(&fb);
                 t_flush_us += t1.elapsed().as_micros() as u64;
 
-                // Yield to the FreeRTOS scheduler so the IDLE task can run and
-                // reset the Task Watchdog Timer. Without this, the polling SPI
-                // busy-loop starves IDLE for ~40ms and triggers the TWDT.
+                // Yield to FreeRTOS IDLE so the Task Watchdog gets reset.
                 FreeRtos::delay_ms(1);
 
                 t_total_us += t_frame_start.elapsed().as_micros() as u64;
