@@ -165,7 +165,10 @@ fn main() -> anyhow::Result<()> {
     let adc1_driver = Arc::new(OneshotAdcDriver::<ADCU1>::new(adc1)?);
 
     // 11. Create the HTTP server with default configuration
-    let mut server = EspHttpServer::new(&HttpServerConfig::default())?;
+    let mut server = EspHttpServer::new(&HttpServerConfig {
+        max_uri_handlers: 20,
+        ..Default::default()
+    })?;
 
     // 11. Register each hardware module; each function sets up its API endpoint
     //     and returns an HTML card to be embedded in the main page.
