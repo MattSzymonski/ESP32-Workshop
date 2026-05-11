@@ -73,6 +73,9 @@ src/
   solar/
     mod.rs          — Solar panel ADC module
     card.html       — Dashboard card HTML for the solar panel
+  buzzer/
+    mod.rs          — Buzzer module
+    card.html       — Dashboard card HTML for the buzzer
   display/
     mod.rs          — ST7735S SPI TFT display module (parent + mode switch)
     card.html       — Dashboard card HTML for the display
@@ -177,6 +180,59 @@ ESP32-C6-DevKitC-1        SG90 Servo
 │             5V0 ├───────┤ Red    (VCC)    │
 │           GPIO4 ├───────┤ Orange (Signal) │
 └─────────────────┘       └─────────────────┘
+```
+
+---
+---
+
+### Buzzer (`src/buzzer/`)
+
+Drives a **passive or active buzzer** via the ESP32-C6 **LEDC** (PWM) peripheral.
+
+| Property   | Value                                    |
+| ---------- | ---------------------------------------- |
+| GPIO       | **GPIO15**                               |
+| Protocol   | 2 kHz PWM, 50 % duty cycle (square wave) |
+| Resolution | 8-bit (255 ticks / 500 µs period)        |
+| Duration   | 1–5000 ms, default 200 ms                |
+| Driver     | `esp-idf-svc` LEDC driver                |
+
+### API endpoint
+
+```text
+GET /api/beep?duration_ms=<1-5000>
+```
+
+Sounds the buzzer for the requested number of milliseconds.
+The dashboard card provides a slider (50–2000 ms) and a Beep button.
+
+Response:
+
+```json
+{"beeped":true,"duration_ms":200}
+```
+
+### Notes
+
+- **Passive buzzer** (recommended): produces a clear 2 kHz tone driven by the PWM square wave.
+- **Active buzzer**: the PWM signal still works — the buzzer will emit its built-in tone while the duty cycle is non-zero.
+- The HTTP handler releases the mutex lock during the sleep phase so the server remains responsive to other requests while the buzzer is sounding.
+
+### Wiring
+
+| Buzzer pin     | Connect to                                    |
+| -------------- | --------------------------------------------- |
+| **+** (VCC)    | **3V3** or **5V0** depending on buzzer rating |
+| **−** (GND)    | **GND**                                       |
+| **S** (signal) | **GPIO15**                                    |
+
+```text
+ESP32-C6-DevKitC-1        Buzzer
+┌─────────────────┐       ┌────────────────┐
+│             3V3 ├───────┤ + (VCC)        │
+│             GND ├───────┤ − (GND)        │
+│          GPIO15 ├───────┤ S (signal)     │
+└─────────────────┘       └────────────────┘
 ```
 
 ---
@@ -308,6 +364,21 @@ ESP32-C6-DevKitC-1        ST7735S display
 │           GPIO7 ├───────┤ BLK / LED        │
 └─────────────────┘       └──────────────────┘
 ```
+
+---
+
+## Reserved GPIO pins (ESP32-C6-DevKitC-1)
+
+The following pins are reserved by the board hardware and **must not be used as GPIO outputs**:
+
+| GPIO       | Function                  | Consequence of misuse               |
+| ---------- | ------------------------- | ----------------------------------- |
+| **GPIO12** | USB D− (USB Serial/JTAG)  | Drops USB connection                |
+| **GPIO13** | USB D+ (USB Serial/JTAG)  | Drops USB connection / device reset |
+| **GPIO1**  | UART0 TX (serial monitor) | Corrupts log output                 |
+| **GPIO9**  | BOOT button (active low)  | Unintended boot-mode entry          |
+
+> **Tip:** If the board suddenly disconnects or resets when a new GPIO output is initialised, check that the pin is not in the table above.
 
 ---
 

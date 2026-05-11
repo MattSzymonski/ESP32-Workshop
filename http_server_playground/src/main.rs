@@ -1,10 +1,11 @@
 // This file is the application entry point for the ESP-IDF-based modular HTTP server.
 // - Connects to Wi-Fi using credentials from env.rs, then starts an EspHttpServer.
-// - Delegates hardware control to three submodules: led, servo, and display.
+// - Delegates hardware control to five submodules: led, servo, solar, buzzer, and display.
 // - Each submodule registers its own HTTP API endpoints and returns an HTML card snippet.
 // - Assembles the final web page by injecting all module cards into the index.html template.
 // - Serves the page on GET /, the stylesheet on GET /style.css, and a ping on GET /health.
 
+mod buzzer;
 mod display;
 mod led;
 mod servo;
@@ -33,7 +34,7 @@ include!("./env.rs");
 const INDEX_HTML: &str = include_str!("index.html");
 const STYLE_CSS: &str = include_str!("style.css");
 
-const USED_GPIOS: [i32; 9] = [2, 4, 5, 6, 7, 8, 10, 11, 18];
+const USED_GPIOS: [i32; 10] = [2, 4, 5, 6, 7, 8, 10, 11, 15, 18];
 
 // Resets a single GPIO pin to a clean output state: disables hold, resets the pad,
 // disables sleep-mode selection, sets floating pull mode, and maximises drive strength.
@@ -177,7 +178,18 @@ fn main() -> anyhow::Result<()> {
         // 11c. Solar panel voltage via ADC1 on GPIO2
         let solar_html = solar::register(&mut server, peripherals.adc1, peripherals.pins.gpio2)?;
 
-        // 11d. ST7735S 128x160 SPI display via SPI2
+        // 11d. Buzzer on GPIO15 via LEDC PWM
+        //      NOTE: GPIO12 = USB D-, GPIO13 = USB D+ on ESP32-C6-DevKitC-1.
+        //      Those pins must never be used as GPIO outputs — doing so drops
+        //      the USB connection and resets the device.
+        let buzzer_html = buzzer::register(
+            &mut server,
+            peripherals.ledc.timer1,
+            peripherals.ledc.channel1,
+            peripherals.pins.gpio15,
+        )?;
+
+        // 11e. ST7735S 128x160 SPI display via SPI2
         let display_html = display::register(
             &mut server,
             peripherals.spi2,
@@ -189,7 +201,10 @@ fn main() -> anyhow::Result<()> {
             peripherals.pins.gpio7.into(),  // BL, BLK
         )?;
 
-        let modules_html = format!("{}{}{}{}", led_html, servo_html, solar_html, display_html);
+        let modules_html = format!(
+            "{}{}{}{}{}",
+            led_html, servo_html, solar_html, buzzer_html, display_html
+        );
 
         Arc::new(INDEX_HTML.replace("{{MODULES}}", &modules_html))
     };

@@ -1,0 +1,23 @@
+<div class="module-card">
+    <h2>Buzzer</h2>
+    <p>Passive/active buzzer on GPIO15</p>
+    <label for="beep-duration">Duration: <span id="beep-duration-val">200</span> ms</label>
+    <input id="beep-duration" type="range" min="50" max="2000" step="50" value="200"
+        oninput="document.getElementById('beep-duration-val').textContent = this.value">
+    <label for="beep-freq">Pitch: <span id="beep-freq-val">2000</span> Hz</label>
+    <input id="beep-freq" type="range" min="100" max="8000" step="100" value="2000"
+        oninput="document.getElementById('beep-freq-val').textContent = this.value">
+    <button onclick="beep()">Beep</button>
+    <p id="beep-status" class="status"></p>
+    <script>
+        async function beep() {
+            var duration = document.getElementById('beep-duration').value;
+            var freq = document.getElementById('beep-freq').value;
+            var status = document.getElementById('beep-status');
+            status.textContent = 'Beeping\u2026';
+            var data = await fetch('/api/beep?duration_ms=' + duration + '&frequency_hz=' + freq).then(r => r.json());
+            status.textContent = data.beeped ? 'Done!' : 'Error';
+            setTimeout(function () { status.textContent = ''; }, 1500);
+        }
+    </script>
+</div>
