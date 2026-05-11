@@ -1,0 +1,26 @@
+<div class="module-card">
+    <h2>Button</h2>
+    <p>Press counter on GPIO9 (BOOT button)</p>
+    <div style="font-size:3rem;font-weight:700;margin:12px 0;" id="btn-count">0</div>
+    <button onclick="buttonReset()">Reset</button>
+    <p id="btn-status" class="status"></p>
+    <script>
+        var buttonPollInterval = null;
+
+        async function buttonPoll() {
+            var data = await fetch('/api/button').then(r => r.json());
+            document.getElementById('btn-count').textContent = data.count;
+        }
+
+        async function buttonReset() {
+            await fetch('/api/button/reset');
+            document.getElementById('btn-count').textContent = '0';
+            var status = document.getElementById('btn-status');
+            status.textContent = 'Reset!';
+            setTimeout(function () { status.textContent = ''; }, 1000);
+        }
+
+        buttonPollInterval = setInterval(buttonPoll, 500);
+        buttonPoll();
+    </script>
+</div>

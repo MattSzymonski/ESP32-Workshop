@@ -73,6 +73,9 @@ src/
   solar/
     mod.rs          — Solar panel ADC module
     card.html       — Dashboard card HTML for the solar panel
+  button/
+    mod.rs          — Button press counter module
+    card.html       — Dashboard card HTML for the button
   buzzer/
     mod.rs          — Buzzer module
     card.html       — Dashboard card HTML for the buzzer
@@ -183,6 +186,43 @@ ESP32-C6-DevKitC-1        SG90 Servo
 ```
 
 ---
+---
+
+### Button (`src/button/`)
+
+Counts presses of a button via the ESP32-C6 **GPIO** input peripheral.
+
+| Property  | Value                                                 |
+| --------- | ----------------------------------------------------- |
+| GPIO      | **GPIO9** (onboard BOOT button on ESP32-C6-DevKitC-1) |
+| Logic     | Active-low, internal pull-up enabled                  |
+| Detection | Background polling thread, 50 ms interval (debounce)  |
+| Driver    | `esp-idf-svc` GPIO input driver                       |
+
+### API endpoints
+
+```text
+GET /api/button        → {"count": N}    returns current press count
+GET /api/button/reset  → {"count": 0}    resets count to zero
+```
+
+The dashboard card shows a large live counter (auto-refreshes every 500 ms) and a Reset button.
+
+### Notes
+
+- **GPIO9 / BOOT button:** this is the onboard button already present on the ESP32-C6-DevKitC-1 board. No external wiring is required. An external button wired between GPIO9 and GND also works.
+- The strapping level on GPIO9 is only sampled by the ROM bootloader during reset. After boot it becomes a regular GPIO input and can be used freely.
+- The 50 ms polling interval acts as implicit debounce. Bounces shorter than 50 ms are suppressed; presses shorter than 50 ms may occasionally be missed.
+
+### Wiring (external button)
+
+An external button is optional since the BOOT button is already connected:
+
+| Button pin | Connect to |
+| ---------- | ---------- |
+| Pin 1      | **GPIO9**  |
+| Pin 2      | **GND**    |
+
 ---
 
 ### Buzzer (`src/buzzer/`)
@@ -371,12 +411,12 @@ ESP32-C6-DevKitC-1        ST7735S display
 
 The following pins are reserved by the board hardware and **must not be used as GPIO outputs**:
 
-| GPIO       | Function                  | Consequence of misuse               |
-| ---------- | ------------------------- | ----------------------------------- |
-| **GPIO12** | USB D− (USB Serial/JTAG)  | Drops USB connection                |
-| **GPIO13** | USB D+ (USB Serial/JTAG)  | Drops USB connection / device reset |
-| **GPIO1**  | UART0 TX (serial monitor) | Corrupts log output                 |
-| **GPIO9**  | BOOT button (active low)  | Unintended boot-mode entry          |
+| GPIO       | Function                  | Consequence of misuse                                                                |
+| ---------- | ------------------------- | ------------------------------------------------------------------------------------ |
+| **GPIO12** | USB D− (USB Serial/JTAG)  | Drops USB connection                                                                 |
+| **GPIO13** | USB D+ (USB Serial/JTAG)  | Drops USB connection / device reset                                                  |
+| **GPIO1**  | UART0 TX (serial monitor) | Corrupts log output                                                                  |
+| **GPIO9**  | BOOT button (active low)  | Unintended boot-mode entry — **safe to use as input** after boot (see Button module) |
 
 > **Tip:** If the board suddenly disconnects or resets when a new GPIO output is initialised, check that the pin is not in the table above.
 
