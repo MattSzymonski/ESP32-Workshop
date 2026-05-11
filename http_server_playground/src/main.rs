@@ -4,7 +4,6 @@
 // - Each submodule registers its own HTTP API endpoints and returns an HTML card snippet.
 // - Assembles the final web page by injecting all module cards into the index.html template.
 // - Serves the page on GET /, the stylesheet on GET /style.css, and a ping on GET /health.
-// - Depends on: esp-idf-svc (Wi-Fi, HTTP server, peripherals), anyhow, and the three submodules.
 
 mod display;
 mod led;
@@ -17,9 +16,10 @@ use esp_idf_svc::http::server::{Configuration as HttpServerConfig, EspHttpServer
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::*;
 use esp_idf_svc::wifi::{
-    BlockingWifi, ClientConfiguration, Configuration as WifiConfiguration, EspWifi,
+    BlockingWifi, ClientConfiguration, Configuration as WifiConfiguration, EspWifi, WifiEvent,
 };
 use log::info;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,156 +60,182 @@ fn prepare_gpio_pads() {
 fn main() -> anyhow::Result<()> {
     // 1. Apply IDF patches required by the esp-idf-svc ecosystem
     esp_idf_svc::sys::link_patches();
+
     // 2. Initialise the ESP-IDF logger so info!/warn! output reaches the serial console
     esp_idf_svc::log::EspLogger::initialize_default();
 
+    // 3. Prepare all used GPIO pads to ensure clean state for the drivers
     prepare_gpio_pads();
 
     info!("Starting ESP-IDF Rust web server...");
 
-    // 3. Claim exclusive access to the peripheral singletons, event loop, and NVS storage
+    // 4. Claim exclusive access to the peripheral singletons, event loop, and NVS storage
     let peripherals = Peripherals::take()?;
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
 
-    // 4. Create the Wi-Fi driver bound to the modem peripheral
+    // 5. Create the Wi-Fi driver bound to the modem peripheral.
+    //    Clone the event loop before it is moved into BlockingWifi so we can
+    //    subscribe to WifiEvent::StaDisconnected in the connect loop below.
+    let event_loop = sys_loop.clone();
     let mut wifi = BlockingWifi::wrap(
         EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
         sys_loop,
     )?;
 
-    // 5. Configure as a station (client) with the credentials from env.rs
+    // 6. Configure as a station (client) with the credentials from env.rs
     wifi.set_configuration(&WifiConfiguration::Client(ClientConfiguration {
         ssid: WIFI_SSID.try_into().unwrap(),
         password: WIFI_PASSWORD.try_into().unwrap(),
         ..Default::default()
     }))?;
 
-    // 6. Start the Wi-Fi stack (does not connect yet)
+    // 7. Start the Wi-Fi stack (does not connect yet)
     wifi.start()?;
     info!("WiFi started");
 
-    // Give the router time to expire any stale association from a previous run,
-    // reducing the number of AUTH_EXPIRE retries on fast restarts.
-    std::thread::sleep(Duration::from_millis(500));
-
-    // 7. Attempt connection with automatic retry.
-    //    The router can reject the first attempt with AUTH_EXPIRE when it still holds
-    //    stale state from a previous run, so we loop until both the association and
-    //    DHCP lease succeed.
-    loop {
-        // 7a. Try to associate with the access point
-        match wifi.connect() {
-            Ok(_) => {}
-            Err(e) => {
-                // Association failed — wait briefly and retry from the top
-                log::warn!("WiFi connect failed ({:?}), retrying...", e);
-                std::thread::sleep(Duration::from_secs(2));
-                continue;
-            }
+    // 8. Attempt connection with automatic retry.
+    let auth_failed = Arc::new(AtomicBool::new(false));
+    let auth_failed_flag = auth_failed.clone();
+    let _disconnect_sub = event_loop.subscribe::<WifiEvent, _>(move |event| {
+        if matches!(event, WifiEvent::StaDisconnected { .. }) {
+            auth_failed_flag.store(true, Ordering::Relaxed);
         }
-        info!("WiFi connecting...");
+    })?;
 
-        // 7b. Wait for the network interface (DHCP) to come up
+    loop {
+        // 8a. Start a non-blocking association attempt
+        auth_failed.store(false, Ordering::Relaxed);
+        wifi.wifi_mut().connect()?;
+
+        // 8b. Poll every 200 ms for success or fast failure.
+        //     Without this, a rejected auth attempt would waste the full 15 s
+        //     that BlockingWifi::connect() spends waiting for its internal timeout.
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let associated = loop {
+            if wifi.wifi().is_connected().unwrap_or(false) {
+                break true; // Association + auth succeeded
+            }
+            if auth_failed.load(Ordering::Relaxed) {
+                break false; // StaDisconnected fired — auth rejected by the AP
+            }
+            if std::time::Instant::now() >= deadline {
+                break false; // Hard timeout (should rarely be reached)
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        };
+
+        if !associated {
+            log::warn!("WiFi association failed, retrying...");
+            wifi.wifi_mut().disconnect().ok();
+            // Short pause so the AP can clear its stale auth state.
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        }
+        info!("WiFi associated, waiting for DHCP...");
+
+        // 8c. Wait for the network interface (DHCP) to come up
         match wifi.wait_netif_up() {
-            Ok(_) => break, // Connected successfully — exit the retry loop
+            Ok(_) => break, // IP obtained — exit the retry loop
             Err(e) => {
-                // DHCP timed out — disconnect to reset driver state before retrying
-                log::warn!("WiFi netif not up ({:?}), retrying...", e);
-                wifi.disconnect().ok();
-                std::thread::sleep(Duration::from_secs(2));
+                // DHCP timed out — disconnect and retry from the top
+                log::warn!("WiFi DHCP failed ({:?}), retrying...", e);
+                wifi.wifi_mut().disconnect().ok();
+                std::thread::sleep(Duration::from_millis(300));
             }
         }
     }
 
-    // 8. Log the assigned IP address
+    // 9. Log the assigned IP address
     let ip_info = wifi.wifi().sta_netif().get_ip_info()?;
     info!("WiFi connected!");
     info!("IP address: {}", ip_info.ip);
     info!("Open: http://{}", ip_info.ip);
 
-    // 9. Create the HTTP server with default configuration
+    // 10. Create the HTTP server with default configuration
     let mut server = EspHttpServer::new(&HttpServerConfig::default())?;
 
-    // 10. Register each hardware module; each function sets up its API endpoint
+    // 11. Register each hardware module; each function sets up its API endpoint
     //     and returns an HTML card to be embedded in the main page.
-    // 10a. WS2812 addressable RGB LED on GPIO8 via RMT
-    #[allow(deprecated)]
-    let led_html = led::register(
-        &mut server,
-        peripherals.rmt.channel0,
-        peripherals.pins.gpio8,
-    )?;
+    let page_html = {
+        // 11a. WS2812 addressable RGB LED on GPIO8 via RMT
+        #[allow(deprecated)]
+        let led_html = led::register(
+            &mut server,
+            peripherals.rmt.channel0,
+            peripherals.pins.gpio8,
+        )?;
 
-    // 10b. SG90 micro servo on GPIO4 via LEDC PWM
-    let servo_html = servo::register(
-        &mut server,
-        peripherals.ledc.timer0,
-        peripherals.ledc.channel0,
-        peripherals.pins.gpio4,
-    )?;
+        // 11b. SG90 micro servo on GPIO4 via LEDC PWM
+        let servo_html = servo::register(
+            &mut server,
+            peripherals.ledc.timer0,
+            peripherals.ledc.channel0,
+            peripherals.pins.gpio4,
+        )?;
 
-    // 10c. Solar panel voltage via ADC1 on GPIO2
-    let solar_html = solar::register(
-        &mut server,
-        peripherals.adc1,
-        peripherals.pins.gpio2,
-    )?;
+        // 11c. Solar panel voltage via ADC1 on GPIO2
+        let solar_html = solar::register(&mut server, peripherals.adc1, peripherals.pins.gpio2)?;
 
-    // 10d. ST7735S 128x160 SPI display via SPI2
-    let display_html = display::register(
-        &mut server,
-        peripherals.spi2,
-        peripherals.pins.gpio10,        // SCL
-        peripherals.pins.gpio11,        // SDA
-        peripherals.pins.gpio18.into(), // CS
-        peripherals.pins.gpio5.into(),  // DC
-        peripherals.pins.gpio6.into(),  // RST, RES
-        peripherals.pins.gpio7.into(),  // BL, BLK
-    )?;
+        // 11d. ST7735S 128x160 SPI display via SPI2
+        let display_html = display::register(
+            &mut server,
+            peripherals.spi2,
+            peripherals.pins.gpio10,        // SCL
+            peripherals.pins.gpio11,        // SDA
+            peripherals.pins.gpio18.into(), // CS
+            peripherals.pins.gpio5.into(),  // DC
+            peripherals.pins.gpio6.into(),  // RST, RES
+            peripherals.pins.gpio7.into(),  // BL, BLK
+        )?;
 
-    // 11. Build the final index page by substituting all module cards into the template
-    let modules_html = format!("{}{}{}{}", led_html, servo_html, solar_html, display_html);
+        let modules_html = format!("{}{}{}{}", led_html, servo_html, solar_html, display_html);
 
-    let page_html = Arc::new(INDEX_HTML.replace("{{MODULES}}", &modules_html));
+        Arc::new(INDEX_HTML.replace("{{MODULES}}", &modules_html))
+    };
 
-    // Handler: GET / — serves the dynamically assembled main HTML page
-    let page_for_handler = page_html.clone();
-    server.fn_handler("/", esp_idf_svc::http::Method::Get, move |req| {
-        // 1. Build response headers
-        let headers = [("Content-Type", "text/html; charset=utf-8")];
-        // 2. Open the response stream with HTTP 200
-        let mut response = req.into_response(200, Some("OK"), &headers)?;
-        // 3. Write the assembled HTML page
-        response.write(page_for_handler.as_bytes())?;
-        Ok::<(), anyhow::Error>(())
-    })?;
+    // 12. Register the main page handler and the stylesheet handler, and a simple health check endpoint.
+    {
+        // 12a. Handler: GET / — serves the dynamically assembled main HTML page
+        let page_for_handler = page_html.clone();
+        server.fn_handler("/", esp_idf_svc::http::Method::Get, move |req| {
+            // 1. Build response headers
+            let headers = [("Content-Type", "text/html; charset=utf-8")];
+            // 2. Open the response stream with HTTP 200
+            let mut response = req.into_response(200, Some("OK"), &headers)?;
+            // 3. Write the assembled HTML page
+            response.write(page_for_handler.as_bytes())?;
+            Ok::<(), anyhow::Error>(())
+        })?;
 
-    // Handler: GET /style.css — serves the stylesheet
-    server.fn_handler("/style.css", esp_idf_svc::http::Method::Get, |req| {
-        // 1. Build response headers
-        let headers = [("Content-Type", "text/css; charset=utf-8")];
-        // 2. Open the response stream with HTTP 200
-        let mut response = req.into_response(200, Some("OK"), &headers)?;
-        // 3. Write the embedded CSS
-        response.write(STYLE_CSS.as_bytes())?;
-        Ok::<(), anyhow::Error>(())
-    })?;
+        // 12b. Handler: GET /style.css — serves the stylesheet
+        server.fn_handler("/style.css", esp_idf_svc::http::Method::Get, |req| {
+            // 1. Build response headers
+            let headers = [("Content-Type", "text/css; charset=utf-8")];
+            // 2. Open the response stream with HTTP 200
+            let mut response = req.into_response(200, Some("OK"), &headers)?;
+            // 3. Write the embedded CSS
+            response.write(STYLE_CSS.as_bytes())?;
+            Ok::<(), anyhow::Error>(())
+        })?;
 
-    // Handler: GET /health — simple health-check endpoint
-    server.fn_handler("/health", esp_idf_svc::http::Method::Get, |req| {
-        // 1. Build response headers
-        let headers = [("Content-Type", "application/json")];
-        // 2. Open the response stream with HTTP 200
-        let mut response = req.into_response(200, Some("OK"), &headers)?;
-        // 3. Write the JSON status payload
-        response.write(br#"{"status":"ok"}"#)?;
-        Ok::<(), anyhow::Error>(())
-    })?;
+        // 12c. Handler: GET /health — simple health-check endpoint
+        server.fn_handler("/health", esp_idf_svc::http::Method::Get, |req| {
+            // 1. Build response headers
+            let headers = [("Content-Type", "application/json")];
+            // 2. Open the response stream with HTTP 200
+            let mut response = req.into_response(200, Some("OK"), &headers)?;
+            // 3. Write the JSON status payload
+            response.write(br#"{"status":"ok"}"#)?;
+            Ok::<(), anyhow::Error>(())
+        })?;
+    }
 
     info!("HTTP server started");
 
-    // 12. Park the main task in an idle loop.
+    info!("Let's goooo!");
+
+    // 13. Park the main task in an idle loop.
     //     The HTTP server runs on background threads managed by ESP-IDF; the main task
     //     must stay alive to keep the server (and the wifi variable) from being dropped.
     loop {
