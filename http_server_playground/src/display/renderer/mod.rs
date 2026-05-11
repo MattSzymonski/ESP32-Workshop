@@ -1,4 +1,4 @@
-﻿// Renderer submodule — software 3-D rasteriser drawing a rotating cube.
+// Renderer submodule — software 3-D rasteriser drawing a rotating cube.
 //
 // Uses the shared display hardware via a Mutex, holding the lock only during the
 // ~5ms SPI flush. The ~0.4ms CPU render runs without the lock. The thread sleeps

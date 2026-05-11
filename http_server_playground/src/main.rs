@@ -9,6 +9,7 @@
 mod display;
 mod led;
 mod servo;
+mod solar;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
@@ -32,7 +33,7 @@ include!("./env.rs");
 const INDEX_HTML: &str = include_str!("index.html");
 const STYLE_CSS: &str = include_str!("style.css");
 
-const USED_GPIOS: [i32; 8] = [4, 5, 6, 7, 8, 10, 11, 18];
+const USED_GPIOS: [i32; 9] = [2, 4, 5, 6, 7, 8, 10, 11, 18];
 
 // Resets a single GPIO pin to a clean output state: disables hold, resets the pad,
 // disables sleep-mode selection, sets floating pull mode, and maximises drive strength.
@@ -148,7 +149,14 @@ fn main() -> anyhow::Result<()> {
         peripherals.pins.gpio4,
     )?;
 
-    // 10c. ST7735S 128x160 SPI display via SPI2
+    // 10c. Solar panel voltage via ADC1 on GPIO2
+    let solar_html = solar::register(
+        &mut server,
+        peripherals.adc1,
+        peripherals.pins.gpio2,
+    )?;
+
+    // 10d. ST7735S 128x160 SPI display via SPI2
     let display_html = display::register(
         &mut server,
         peripherals.spi2,
@@ -161,7 +169,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // 11. Build the final index page by substituting all module cards into the template
-    let modules_html = format!("{}{}{}", led_html, servo_html, display_html);
+    let modules_html = format!("{}{}{}{}", led_html, servo_html, solar_html, display_html);
 
     let page_html = Arc::new(INDEX_HTML.replace("{{MODULES}}", &modules_html));
 

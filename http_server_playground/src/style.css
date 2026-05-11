@@ -58,7 +58,7 @@ h1 {
 .modules {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 20px;
 }
 
 .module-card {

@@ -1,0 +1,25 @@
+<div class="module-card">
+    <h2>Solar Panel</h2>
+    <p>ADC voltage reading on GPIO2</p>
+    <div style="font-size:2rem;font-weight:700;margin:8px 0;" id="solar-volts">—</div>
+    <div style="background:rgba(255,255,255,0.06);border-radius:8px;height:12px;overflow:hidden;margin-bottom:8px;">
+        <div id="solar-bar" style="height:100%;width:0%;background:#e8703a;transition:width .4s;border-radius:8px;">
+        </div>
+    </div>
+    <p id="solar-raw" class="status" style="opacity:.5;"></p>
+    <button onclick="solarRead()">Read</button>
+    <p id="solar-status" class="status"></p>
+    <script>
+        var solarInterval = null;
+        async function solarRead() {
+            var data = await fetch('/api/solar').then(r => r.json());
+            var mv = data.voltage_mv;
+            document.getElementById('solar-volts').textContent = mv < 50 ? '\u2014' : mv + ' mV';
+            document.getElementById('solar-bar').style.width = Math.min(mv / 3300 * 100, 100) + '%';
+            document.getElementById('solar-raw').textContent = 'raw: ' + data.raw + ' / 4095';
+        }
+        // Auto-refresh every 2 s
+        solarInterval = setInterval(solarRead, 2000);
+        solarRead();
+    </script>
+</div>

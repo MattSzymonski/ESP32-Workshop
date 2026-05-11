@@ -1,4 +1,4 @@
-﻿// Display module — ST7735S 80x160 SPI display.
+// Display module — ST7735S 80x160 SPI display.
 //
 // Owns the SPI hardware and exposes it to two submodules via a shared Mutex:
 //   - basic:    text/clear operations triggered by HTTP requests.

@@ -70,9 +70,18 @@ src/
   servo/
     mod.rs          — SG90 micro servo module
     card.html       — Dashboard card HTML for the servo
+  solar/
+    mod.rs          — Solar panel ADC module
+    card.html       — Dashboard card HTML for the solar panel
   display/
-    mod.rs          — ST7735S SPI TFT display module
+    mod.rs          — ST7735S SPI TFT display module (parent + mode switch)
     card.html       — Dashboard card HTML for the display
+    basic/
+      mod.rs        — Text / clear sub-mode
+      card.html     — Sub-card HTML
+    renderer/
+      mod.rs        — Software 3-D renderer sub-mode
+      card.html     — Sub-card HTML
 ```
 
 Each module exposes a single:
@@ -169,6 +178,65 @@ ESP32-C6-DevKitC-1        SG90 Servo
 │           GPIO4 ├───────┤ Orange (Signal) │
 └─────────────────┘       └─────────────────┘
 ```
+
+---
+
+### Solar Panel (`src/solar/`)
+
+Reads the solar panel output voltage via the ESP32-C6 **ADC1** peripheral.
+
+| Property    | Value                                  |
+| ----------- | -------------------------------------- |
+| GPIO        | **GPIO2** (ADC1 channel 2 on ESP32-C6) |
+| Attenuation | 12 dB — full-scale input range 0–3.3 V |
+| Resolution  | 12-bit (raw values 0–4095)             |
+| Driver      | `esp-idf-svc` ADC oneshot driver       |
+
+### API endpoint
+
+```text
+GET /api/solar
+```
+
+Returns the current ADC reading and the corresponding voltage.
+
+Response:
+
+```json
+{"raw":2048,"voltage_mv":1650}
+```
+
+The dashboard card auto-refreshes every 2 seconds and shows a live bar graph.
+Readings below 50 mV are displayed as `—` (no signal).
+
+### Floating pin / unconnected readings
+
+GPIO2 picks up capacitive noise from nearby signals when nothing is connected, producing spurious readings of 400–1200 mV.
+The firmware enables the ESP32’s **internal pull-down** (~45 kΩ) on GPIO2 so the pin sits at 0 V when no panel is attached.
+When a solar panel is connected its output easily overrides the weak pull-down and normal measurement resumes.
+
+> **Tip:** If you are using a voltage divider (see below), the lower resistor (e.g. 10 kΩ) also acts as a pull-down stronger than the internal one, giving even more stable zero readings in the dark.
+
+
+Connect the solar panel output through a **voltage divider** if the panel voltage can exceed 3.3 V.
+For a panel that stays within 3.3 V (e.g. a small 5 V panel feeding through a resistor divider):
+
+| Solar panel wire | Connect to              |
+| ---------------- | ----------------------- |
+| **+** (positive) | **GPIO2** (via divider) |
+| **−** (negative) | **GND**                 |
+
+```text
+Solar panel (+) ---- R1 ----+---- GPIO2
+                            |
+                           R2
+                            |
+Solar panel (-) ------------+---- GND (ESP32)
+```
+
+For example R1 = 10 kΩ, R2 = 10 kΩ gives ÷2, suitable for panels up to ~6.6 V.
+
+> **Caution:** Never connect more than **3.3 V** directly to any ESP32 GPIO pin.
 
 ---
 
