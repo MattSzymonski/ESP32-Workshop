@@ -508,9 +508,9 @@ Response:
 | GND         | **GND**    |
 | SCL         | **GPIO10** |
 | SDA         | **GPIO11** |
-| CS          | **GPIO18** |
-| DC          | **GPIO5**  |
 | RES         | **GPIO6**  |
+| DC          | **GPIO5**  |
+| CS          | **GPIO18** |
 | BLK         | **GPIO7**  |
 
 ```text
@@ -520,9 +520,9 @@ ESP32-C6-DevKitC-1        ST7735S display
 │             GND ├───────┤ GND              │
 │          GPIO10 ├───────┤ SCL / CLK        │
 │          GPIO11 ├───────┤ SDA / MOSI       │
-│          GPIO18 ├───────┤ CS               │
-│           GPIO5 ├───────┤ DC               │
 │           GPIO6 ├───────┤ RES / RST        │
+│           GPIO5 ├───────┤ DC               │
+│          GPIO18 ├───────┤ CS               │
 │           GPIO7 ├───────┤ BLK / LED        │
 └─────────────────┘       └──────────────────┘
 ```
