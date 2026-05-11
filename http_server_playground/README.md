@@ -79,6 +79,9 @@ src/
   buzzer/
     mod.rs          — Buzzer module
     card.html       — Dashboard card HTML for the buzzer
+  ultrasonic/
+    mod.rs          — HC-SR04 ultrasonic distance sensor module
+    card.html       — Dashboard card HTML for the ultrasonic sensor
   display/
     mod.rs          — ST7735S SPI TFT display module (parent + mode switch)
     card.html       — Dashboard card HTML for the display
@@ -222,6 +225,69 @@ An external button is optional since the BOOT button is already connected:
 | ---------- | ---------- |
 | Pin 1      | **GPIO9**  |
 | Pin 2      | **GND**    |
+
+---
+
+### Ultrasonic Distance Sensor (`src/ultrasonic/`)
+
+Measures distance using an **HC-SR04** (or compatible) ultrasonic sensor via two GPIO pins.
+
+| Property | Value                                                |
+| -------- | ---------------------------------------------------- |
+| TRIG pin | **GPIO22** — 10 µs output pulse to start measurement |
+| ECHO pin | **GPIO21** — input, pulse width ∝ distance           |
+| Range    | ~2 cm – 400 cm                                       |
+| Formula  | `d = echo_µs × 0.0343 / 2` (cm, sound at 20 °C)      |
+| Timeout  | 30 ms (guards against no-echo / out-of-range)        |
+| Driver   | `esp-idf-svc` GPIO input / output driver             |
+
+### API endpoint
+
+```text
+GET /api/ultrasonic
+```
+
+On success:
+```json
+{"distance_cm": 23.4, "echo_us": 1365}
+```
+
+If no echo is received within the timeout (object out of range or sensor disconnected):
+```json
+{"error": "no echo"}
+```
+
+The dashboard card shows the latest reading in cm, the raw echo duration in µs, a one-shot **Measure** button, and an **Auto** toggle that polls every 2 seconds.
+
+### How it works
+
+1. GPIO22 is pulled HIGH for 10 µs (trigger pulse) using `esp_rom_delay_us` for precise timing.
+2. The firmware waits for GPIO21 (ECHO) to go HIGH — the HC-SR04 raises it when the ultrasound burst is sent.
+3. The HIGH duration of ECHO is measured with `std::time::Instant`.
+4. Distance is calculated: `distance_cm = echo_µs × 0.0343 / 2`.
+
+### Wiring
+
+| HC-SR04 pin | Connect to                                                                                                              |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **VCC**     | **5V0** (the sensor requires 5 V; ECHO output is 5 V — use a resistor divider to bring it to 3.3 V for the ESP32 input) |
+| **GND**     | **GND**                                                                                                                 |
+| **TRIG**    | **GPIO22**                                                                                                              |
+| **ECHO**    | **GPIO21** via voltage divider (e.g. 1 kΩ + 2 kΩ → 3.3 V at GPIO)                                                       |
+
+```text
+ESP32-C6                 HC-SR04
+┌─────────────────┐      ┌──────────────┐
+│             5V0 ├──────┤ VCC          │
+│             GND ├──────┤ GND          │
+│          GPIO22 ├──────┤ TRIG         │
+│                 │      │ ECHO ──┬─────┐
+│          GPIO21 ├──R2──┤              │  R1
+└─────────────────┘      └──────────────┘  └─ GND
+                            R1=1kΩ, R2=2kΩ
+```
+
+> **Caution:** The HC-SR04 ECHO pin outputs **5 V**. Connect it to GPIO21 through a resistor divider (1 kΩ / 2 kΩ) to limit the input to 3.3 V, otherwise the ESP32 GPIO may be damaged.
 
 ---
 

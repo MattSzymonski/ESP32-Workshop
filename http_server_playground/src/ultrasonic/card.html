@@ -1,0 +1,36 @@
+<div class="module-card">
+    <h2>Ultrasonic</h2>
+    <p>HC-SR04 distance sensor — TRIG: GPIO22, ECHO: GPIO21</p>
+    <div style="font-size:2.5rem;font-weight:700;margin:12px 0;" id="us-distance">—</div>
+    <div style="font-size:0.85rem;color:#888;" id="us-echo"></div>
+    <button onclick="ultrasonicRead()">Measure</button>
+    <button onclick="ultrasonicToggle()" id="us-toggle-btn">Auto (2s)</button>
+    <p id="us-status" class="status"></p>
+    <script>
+        var ultrasonicInterval = null;
+
+        async function ultrasonicRead() {
+            var data = await fetch('/api/ultrasonic').then(r => r.json());
+            if (data.error) {
+                document.getElementById('us-distance').textContent = '\u2014';
+                document.getElementById('us-echo').textContent = data.error;
+            } else {
+                document.getElementById('us-distance').textContent = data.distance_cm.toFixed(1) + ' cm';
+                document.getElementById('us-echo').textContent = 'echo: ' + data.echo_us + ' \u00b5s';
+            }
+        }
+
+        function ultrasonicToggle() {
+            var btn = document.getElementById('us-toggle-btn');
+            if (ultrasonicInterval) {
+                clearInterval(ultrasonicInterval);
+                ultrasonicInterval = null;
+                btn.textContent = 'Auto (2s)';
+            } else {
+                ultrasonicInterval = setInterval(ultrasonicRead, 2000);
+                ultrasonicRead();
+                btn.textContent = 'Stop';
+            }
+        }
+    </script>
+</div>

@@ -1,6 +1,6 @@
 // This file is the application entry point for the ESP-IDF-based modular HTTP server.
 // - Connects to Wi-Fi using credentials from env.rs, then starts an EspHttpServer.
-// - Delegates hardware control to six submodules: led, servo, solar, buzzer, button, and display.
+// - Delegates hardware control to seven submodules: led, servo, solar, buzzer, button, ultrasonic, and display.
 // - Each submodule registers its own HTTP API endpoints and returns an HTML card snippet.
 // - Assembles the final web page by injecting all module cards into the index.html template.
 // - Serves the page on GET /, the stylesheet on GET /style.css, and a ping on GET /health.
@@ -11,6 +11,7 @@ mod display;
 mod led;
 mod servo;
 mod solar;
+mod ultrasonic;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
@@ -35,7 +36,7 @@ include!("./env.rs");
 const INDEX_HTML: &str = include_str!("index.html");
 const STYLE_CSS: &str = include_str!("style.css");
 
-const USED_GPIOS: [i32; 11] = [2, 4, 5, 6, 7, 8, 9, 10, 11, 15, 18];
+const USED_GPIOS: [i32; 13] = [2, 4, 5, 6, 7, 8, 9, 10, 11, 15, 18, 21, 22];
 
 // Resets a single GPIO pin to a clean output state: disables hold, resets the pad,
 // disables sleep-mode selection, sets floating pull mode, and maximises drive strength.
@@ -195,7 +196,14 @@ fn main() -> anyhow::Result<()> {
             peripherals.pins.gpio15,
         )?;
 
-        // 11e. ST7735S 128x160 SPI display via SPI2
+        // 11f. HC-SR04 ultrasonic distance sensor — TRIG: GPIO22, ECHO: GPIO21
+        let ultrasonic_html = ultrasonic::register(
+            &mut server,
+            peripherals.pins.gpio22,
+            peripherals.pins.gpio21,
+        )?;
+
+        // 11g. ST7735S 128x160 SPI display via SPI2
         let display_html = display::register(
             &mut server,
             peripherals.spi2,
@@ -208,8 +216,14 @@ fn main() -> anyhow::Result<()> {
         )?;
 
         let modules_html = format!(
-            "{}{}{}{}{}{}",
-            led_html, servo_html, solar_html, button_html, buzzer_html, display_html
+            "{}{}{}{}{}{}{}",
+            led_html,
+            servo_html,
+            solar_html,
+            button_html,
+            buzzer_html,
+            ultrasonic_html,
+            display_html
         );
 
         Arc::new(INDEX_HTML.replace("{{MODULES}}", &modules_html))
