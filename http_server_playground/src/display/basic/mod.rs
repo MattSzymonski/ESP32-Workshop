@@ -110,7 +110,7 @@ pub(super) fn register(
                     .map(|s| parse_hex_color(s))
                     .unwrap_or(Rgb565::WHITE);
 
-                // Clear to black, then draw text centred vertically.
+                // Clear to black, then draw text centerd vertically.
                 let mut raw = display.lock().unwrap();
                 raw.fill_solid(0x0000);
                 let mut target = BasicDisplay(raw);

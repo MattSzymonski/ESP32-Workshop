@@ -82,6 +82,9 @@ src/
   ultrasonic/
     mod.rs          — HC-SR04 ultrasonic distance sensor module
     card.html       — Dashboard card HTML for the ultrasonic sensor
+  joystick/
+    mod.rs          — Joystick module (VRX/VRY ADC + SW button)
+    card.html       — Dashboard card HTML for the joystick
   display/
     mod.rs          — ST7735S SPI TFT display module (parent + mode switch)
     card.html       — Dashboard card HTML for the display
@@ -225,6 +228,59 @@ An external button is optional since the BOOT button is already connected:
 | ---------- | ---------- |
 | Pin 1      | **GPIO9**  |
 | Pin 2      | **GND**    |
+
+---
+
+### Joystick (`src/joystick/`)
+
+Reads a two-axis joystick module (e.g. KY-023) via ADC and a digital input.
+
+| Property  | Value                                                            |
+| --------- | ---------------------------------------------------------------- |
+| VRX pin   | **GPIO0** — horizontal axis, ADC1 channel 0 (12-bit raw, 0–4095) |
+| VRY pin   | **GPIO3** — vertical axis, ADC1 channel 3 (12-bit raw, 0–4095)   |
+| SW pin    | **GPIO20** — push-button, active-low, internal pull-up           |
+| ADC range | DB\_12 attenuation — 0–3.3 V, full 0–4095 count range            |
+| SW poll   | Background thread, 50 ms interval (debounce)                     |
+| Driver    | `esp-idf-svc` ADC oneshot driver (shared with solar module)      |
+
+> **Note:** GPIO0–6 are the only ADC-capable pins on ESP32-C6. GPIO19/GPIO20 (the
+> physically convenient pins) have **no ADC**. GPIO0 and GPIO3 are the two free
+> ADC1 pins not used by other modules. The ADC1 hardware driver is created once
+> in `main.rs` and shared between solar and joystick via `Arc<AdcDriver>`.
+
+> **Note:** GPIO15 is already the buzzer signal pin, so GPIO20 is used for SW.
+
+### API endpoint
+
+```text
+GET /api/joystick
+```
+
+Returns:
+```json
+{"x": 2048, "y": 2048, "sw": false}
+```
+
+| Field | Description                                                        |
+| ----- | ------------------------------------------------------------------ |
+| `x`   | VRX raw ADC count 0–4095 (left=0, right=4095 — direction may vary) |
+| `y`   | VRY raw ADC count 0–4095 (up=0, down=4095 — direction may vary)    |
+| `sw`  | `true` for 200 ms after each button press, then `false`            |
+
+The dashboard card shows a live SVG ring with a circle inside that moves with
+the stick position, updating every 150 ms. A small ring on the right fills
+green for 200 ms whenever the button is pressed.
+
+### Wiring
+
+| Joystick pin | Connect to                                                    |
+| ------------ | ------------------------------------------------------------- |
+| **GND**      | **GND**                                                       |
+| **+5V**      | **3V3** (KY-023 works at 3.3 V; ADC input stays within range) |
+| **VRX**      | **GPIO0**                                                     |
+| **VRY**      | **GPIO3**                                                     |
+| **SW**       | **GPIO20**                                                    |
 
 ---
 

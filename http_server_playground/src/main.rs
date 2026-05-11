@@ -1,6 +1,6 @@
 // This file is the application entry point for the ESP-IDF-based modular HTTP server.
 // - Connects to Wi-Fi using credentials from env.rs, then starts an EspHttpServer.
-// - Delegates hardware control to seven submodules: led, servo, solar, buzzer, button, ultrasonic, and display.
+// - Delegates hardware control to eight submodules: led, servo, solar, buzzer, button, ultrasonic, joystick, and display.
 // - Each submodule registers its own HTTP API endpoints and returns an HTML card snippet.
 // - Assembles the final web page by injecting all module cards into the index.html template.
 // - Serves the page on GET /, the stylesheet on GET /style.css, and a ping on GET /health.
@@ -8,12 +8,15 @@
 mod button;
 mod buzzer;
 mod display;
+mod joystick;
 mod led;
 mod servo;
 mod solar;
 mod ultrasonic;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::hal::adc::oneshot::AdcDriver as OneshotAdcDriver;
+use esp_idf_svc::hal::adc::{ADC1, ADCU1};
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::http::server::{Configuration as HttpServerConfig, EspHttpServer};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -36,7 +39,7 @@ include!("./env.rs");
 const INDEX_HTML: &str = include_str!("index.html");
 const STYLE_CSS: &str = include_str!("style.css");
 
-const USED_GPIOS: [i32; 13] = [2, 4, 5, 6, 7, 8, 9, 10, 11, 15, 18, 21, 22];
+const USED_GPIOS: [i32; 16] = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 18, 21, 20, 22];
 
 // Resets a single GPIO pin to a clean output state: disables hold, resets the pad,
 // disables sleep-mode selection, sets floating pull mode, and maximises drive strength.
@@ -155,7 +158,13 @@ fn main() -> anyhow::Result<()> {
     info!("IP address: {}", ip_info.ip);
     info!("Open: http://{}", ip_info.ip);
 
-    // 10. Create the HTTP server with default configuration
+    // 10. Create the shared ADC1 driver.
+    //     ADC1 is a singleton peripheral; both solar and joystick need it, so
+    //     we create one AdcDriver here and share it via Arc.
+    let adc1: ADC1<'static> = unsafe { core::mem::transmute(peripherals.adc1) };
+    let adc1_driver = Arc::new(OneshotAdcDriver::<ADCU1>::new(adc1)?);
+
+    // 11. Create the HTTP server with default configuration
     let mut server = EspHttpServer::new(&HttpServerConfig::default())?;
 
     // 11. Register each hardware module; each function sets up its API endpoint
@@ -177,8 +186,8 @@ fn main() -> anyhow::Result<()> {
             peripherals.pins.gpio4,
         )?;
 
-        // 11c. Solar panel voltage via ADC1 on GPIO2
-        let solar_html = solar::register(&mut server, peripherals.adc1, peripherals.pins.gpio2)?;
+        // 11c. Solar panel voltage via ADC1 on GPIO2 (shares ADC1 driver with joystick)
+        let solar_html = solar::register(&mut server, adc1_driver.clone(), peripherals.pins.gpio2)?;
 
         // 11d. Button press counter on GPIO9 (onboard BOOT button — active-low, pull-up)
         //      GPIO9 is safe to use as a regular input after boot; the strapping
@@ -203,7 +212,18 @@ fn main() -> anyhow::Result<()> {
             peripherals.pins.gpio21,
         )?;
 
-        // 11g. ST7735S 128x160 SPI display via SPI2
+        // 11g. Joystick — VRX: GPIO0, VRY: GPIO3 (ADC1, shared driver), SW: GPIO20
+        //      Note: GPIO19/20 have no ADC on ESP32-C6; GPIO0/GPIO3 are the free ADC1 pins.
+        //      Note: GPIO15 is the buzzer; GPIO20 is used for SW instead.
+        let joystick_html = joystick::register(
+            &mut server,
+            adc1_driver.clone(),
+            peripherals.pins.gpio0,
+            peripherals.pins.gpio3,
+            peripherals.pins.gpio20,
+        )?;
+
+        // 11h. ST7735S 128x160 SPI display via SPI2
         let display_html = display::register(
             &mut server,
             peripherals.spi2,
@@ -216,13 +236,14 @@ fn main() -> anyhow::Result<()> {
         )?;
 
         let modules_html = format!(
-            "{}{}{}{}{}{}{}",
+            "{}{}{}{}{}{}{}{}",
             led_html,
             servo_html,
             solar_html,
             button_html,
             buzzer_html,
             ultrasonic_html,
+            joystick_html,
             display_html
         );
 

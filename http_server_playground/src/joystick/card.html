@@ -1,0 +1,90 @@
+<div class="module-card">
+    <h2>Joystick</h2>
+    <p>VRX: GPIO0 &bull; VRY: GPIO3 &bull; SW: GPIO20</p>
+    <div style="display:flex;align-items:center;justify-content:center;gap:18px;margin:12px 0;">
+        <!-- Joystick ring + ball -->
+        <svg id="js-svg" width="140" height="140" viewBox="0 0 140 140">
+            <circle cx="70" cy="70" r="62" fill="none" stroke="#555" stroke-width="3" />
+            <circle id="js-ball" cx="70" cy="70" r="18" fill="#4CAF50" opacity="0.9" />
+        </svg>
+        <!-- SW button indicator: small ring, filled for 200 ms on press -->
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+            <svg width="36" height="36" viewBox="0 0 36 36">
+                <circle cx="18" cy="18" r="14" id="js-sw-ring" fill="none" stroke="#555" stroke-width="3" />
+                <circle cx="18" cy="18" r="10" id="js-sw-fill" fill="transparent" />
+            </svg>
+            <span style="font-size:0.7rem;color:#888;">Button</span>
+        </div>
+    </div>
+    <div style="font-size:0.8rem;color:#888;" id="js-coords">x: — &nbsp; y: —</div>
+    <button onclick="jsCalibrate()" title="center the stick then click">Calibrate center</button>
+    <script>
+        var jsInterval = null;
+
+        // Calibration state: center and per-side scale for each axis.
+        // Defaults assume a 0-3825 ADC range with center at ~1912.
+        // Press "Calibrate center" with the stick at rest to set exact values.
+        var jsCalX = 1912, jsCalY = 1912;
+        // Max excursion on each side, measured from center.
+        // Will be updated per reading so the ball reaches the ring edge at full deflection.
+        var jsScaleXL = 1912, jsScaleXR = 1913;
+        var jsScaleYU = 1912, jsScaleYD = 1913;
+
+        async function jsCalibrate() {
+            try {
+                var data = await fetch('/api/joystick').then(r => r.json());
+                jsCalX = data.x;
+                jsCalY = data.y;
+                // Reset per-side scales symmetrically from new center
+                jsScaleXL = jsCalX;
+                jsScaleXR = 3825 - jsCalX;
+                jsScaleYU = jsCalY;
+                jsScaleYD = 3825 - jsCalY;
+                document.getElementById('js-coords').textContent =
+                    'Calibrated: cx=' + jsCalX + ' cy=' + jsCalY;
+            } catch (e) { }
+        }
+
+        function jsMapAxis(raw, center, scaleNeg, scalePos) {
+            // Two-sided linear map: raw -> [-1, +1] with independent scales each side.
+            // This ensures full deflection reaches ±1 even if the ADC range is asymmetric.
+            if (raw < center) {
+                return scaleNeg > 0 ? -(center - raw) / scaleNeg : 0;
+            } else {
+                return scalePos > 0 ? (raw - center) / scalePos : 0;
+            }
+        }
+
+        function jsUpdateCard(data) {
+            var nx = jsMapAxis(data.x, jsCalX, jsScaleXL, jsScaleXR);
+            var ny = jsMapAxis(data.y, jsCalY, jsScaleYU, jsScaleYD);
+
+            // Clamp to unit circle, scale to SVG radius (center=70, max offset=44)
+            var dist = Math.sqrt(nx * nx + ny * ny);
+            var maxDist = 44;
+            if (dist > 1) { nx /= dist; ny /= dist; }
+            var svgX = 70 + nx * maxDist;
+            var svgY = 70 + ny * maxDist;
+
+            document.getElementById('js-ball').setAttribute('cx', svgX.toFixed(1));
+            document.getElementById('js-ball').setAttribute('cy', svgY.toFixed(1));
+            document.getElementById('js-coords').textContent =
+                'x: ' + data.x + '\u00a0\u00a0 y: ' + data.y;
+
+            // SW fill: solid green when active, transparent otherwise
+            document.getElementById('js-sw-fill').setAttribute(
+                'fill', data.sw ? '#4CAF50' : 'transparent'
+            );
+        }
+
+        async function jsPoll() {
+            try {
+                var data = await fetch('/api/joystick').then(r => r.json());
+                jsUpdateCard(data);
+            } catch (e) { }
+        }
+
+        jsInterval = setInterval(jsPoll, 150);
+        jsPoll();
+    </script>
+</div>
