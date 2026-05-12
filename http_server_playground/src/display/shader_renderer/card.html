@@ -1,0 +1,28 @@
+<label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+    <div id="shad-toggle" onclick="shadToggle()"
+        style="position:relative;width:44px;height:24px;border-radius:12px;background:#e8703a;transition:background .2s;flex-shrink:0;">
+        <div id="shad-knob"
+            style="position:absolute;top:3px;left:23px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s;">
+        </div>
+    </div>
+    <span id="shad-label">Running</span>
+</label>
+<p id="shad-status" class="status"></p>
+<script>
+    var shadRunning = true;
+    function shadSetVisual(on) {
+        document.getElementById('shad-toggle').style.background = on ? '#e8703a' : '#444';
+        document.getElementById('shad-knob').style.left = on ? '23px' : '3px';
+        document.getElementById('shad-label').textContent = on ? 'Running' : 'Stopped';
+    }
+    async function shadToggle() {
+        var s = document.getElementById('shad-status');
+        var next = !shadRunning;
+        s.textContent = next ? 'Starting\u2026' : 'Stopping\u2026';
+        var data = await fetch('/api/display/shader/' + (next ? 'start' : 'stop')).then(r => r.json());
+        shadRunning = data.running;
+        shadSetVisual(shadRunning);
+        s.textContent = '';
+    }
+    shadSetVisual(true);
+</script>

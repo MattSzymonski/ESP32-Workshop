@@ -1,29 +1,33 @@
 <div class="module-card">
     <h2>Display</h2>
     <p>0.96&quot; 80&times;160 ST7735S on SPI2</p>
-    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px;">
-        <div id="disp-mode-track" onclick="dispToggleMode()"
-            style="position:relative;width:44px;height:24px;border-radius:12px;background:#444;transition:background .2s;flex-shrink:0;">
-            <div id="disp-mode-knob"
-                style="position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s;">
-            </div>
-        </div>
-        <span id="disp-mode-label">Basic</span>
-    </label>
+    <div id="disp-mode-bar"
+        style="display:flex;gap:4px;margin-bottom:12px;background:#333;border-radius:6px;padding:3px;">
+        <button data-mode="basic" onclick="dispSetMode('basic')"
+            style="flex:1;border:0;padding:6px 8px;border-radius:4px;background:transparent;color:#ddd;cursor:pointer;font-size:0.85rem;">Basic</button>
+        <button data-mode="wireframe" onclick="dispSetMode('wireframe')"
+            style="flex:1;border:0;padding:6px 8px;border-radius:4px;background:transparent;color:#ddd;cursor:pointer;font-size:0.85rem;">Wireframe</button>
+        <button data-mode="shader" onclick="dispSetMode('shader')"
+            style="flex:1;border:0;padding:6px 8px;border-radius:4px;background:transparent;color:#ddd;cursor:pointer;font-size:0.85rem;">Shader</button>
+    </div>
     <div id="disp-basic-panel">{{BASIC_CARD}}</div>
-    <div id="disp-renderer-panel" style="display:none">{{RENDERER_CARD}}</div>
+    <div id="disp-wireframe-panel" style="display:none">{{RENDERER_CARD}}</div>
+    <div id="disp-shader-panel" style="display:none">{{SHADER_CARD}}</div>
     <script>
         var dispMode = 'basic';
         function dispUpdateVisual() {
-            var r = dispMode === 'renderer';
-            document.getElementById('disp-mode-track').style.background = r ? '#e8703a' : '#444';
-            document.getElementById('disp-mode-knob').style.left = r ? '23px' : '3px';
-            document.getElementById('disp-mode-label').textContent = r ? 'Renderer' : 'Basic';
-            document.getElementById('disp-basic-panel').style.display = r ? 'none' : '';
-            document.getElementById('disp-renderer-panel').style.display = r ? '' : 'none';
+            var buttons = document.querySelectorAll('#disp-mode-bar button');
+            for (var i = 0; i < buttons.length; i++) {
+                var active = buttons[i].dataset.mode === dispMode;
+                buttons[i].style.background = active ? '#e8703a' : 'transparent';
+                buttons[i].style.color = active ? '#fff' : '#ddd';
+            }
+            document.getElementById('disp-basic-panel').style.display = dispMode === 'basic' ? '' : 'none';
+            document.getElementById('disp-wireframe-panel').style.display = dispMode === 'wireframe' ? '' : 'none';
+            document.getElementById('disp-shader-panel').style.display = dispMode === 'shader' ? '' : 'none';
         }
-        async function dispToggleMode() {
-            var next = dispMode === 'basic' ? 'renderer' : 'basic';
+        async function dispSetMode(next) {
+            if (next === dispMode) return;
             var data = await fetch('/api/display/mode?set=' + next).then(r => r.json());
             dispMode = data.mode;
             dispUpdateVisual();

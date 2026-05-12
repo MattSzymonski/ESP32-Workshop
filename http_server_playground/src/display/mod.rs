@@ -1,15 +1,18 @@
 // Display module — ST7735S 80x160 SPI display.
 //
-// Owns the SPI hardware and exposes it to two submodules via a shared Mutex:
-//   - basic:    text/clear operations triggered by HTTP requests.
-//   - renderer: software 3-D rasteriser on a background thread.
+// Owns the SPI hardware and exposes it to three submodules via a shared Mutex:
+//   - basic:              text/clear operations triggered by HTTP requests.
+//   - wireframe_renderer: software 3-D wireframe rasteriser on a background thread.
+//   - shader_renderer:    full software pipeline (vertex/fragment shaders, z-buffer).
 //
-// A mode flag (basic | renderer) determines which submodule controls the screen.
-// Switching mode is done via GET /api/display/mode?set=basic|renderer.
+// A mode flag (basic | wireframe_renderer | shader_renderer) determines which
+// submodule controls the screen. Switching mode is done via
+// GET /api/display/mode?set=basic|wireframe|shader.
 // Submodule HTML fragments are injected into the outer card at startup.
 
 pub mod basic;
-pub mod renderer;
+pub mod shader_renderer;
+pub mod wireframe_renderer;
 
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::SpiDevice;
@@ -30,15 +33,16 @@ pub(crate) const W: usize = 160;
 pub(crate) const H: usize = 80;
 pub(crate) const PIXELS: usize = W * H;
 pub(crate) const FB_BYTES: usize = PIXELS * 2; // big-endian RGB565: 2 bytes/pixel
-pub(crate) const DISPLAY_Y_OFFSET: u16 = 24;   // physical panel Y address offset
+pub(crate) const DISPLAY_Y_OFFSET: u16 = 24; // physical panel Y address offset
 
 // ─── SPI config ──────────────────────────────────────────────────────────────
 const SPI_FREQ_MHZ: u32 = 40;
 const SPI_DMA_BUF_BYTES: usize = FB_BYTES.next_power_of_two();
 
 // ─── mode constants ───────────────────────────────────────────────────────────
-pub(crate) const MODE_BASIC: u8    = 0;
+pub(crate) const MODE_BASIC: u8 = 0;
 pub(crate) const MODE_RENDERER: u8 = 1;
+pub(crate) const MODE_SHADER: u8 = 2;
 
 pub(crate) type SharedMode = Arc<AtomicU8>;
 
@@ -60,7 +64,7 @@ pub(crate) type SharedDisplay = Arc<Mutex<Box<dyn DisplayOps>>>;
 
 struct RawST7735<S, DC> {
     spi: S,
-    dc:  DC,
+    dc: DC,
 }
 
 impl<S: SpiDevice, DC: OutputPin> RawST7735<S, DC> {
@@ -77,22 +81,25 @@ impl<S: SpiDevice, DC: OutputPin> RawST7735<S, DC> {
         self.data(data);
     }
     fn init(&mut self) {
-        self.cmd(0x01); FreeRtos::delay_ms(200);  // SWRESET
-        self.cmd(0x11); FreeRtos::delay_ms(200);  // SLPOUT
+        self.cmd(0x01);
+        FreeRtos::delay_ms(200); // SWRESET
+        self.cmd(0x11);
+        FreeRtos::delay_ms(200); // SLPOUT
         self.cmd_data(0xB1, &[0x01, 0x2C, 0x2D]); // FRMCTR1
         self.cmd_data(0xB2, &[0x01, 0x2C, 0x2D]); // FRMCTR2
         self.cmd_data(0xB3, &[0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D]); // FRMCTR3
-        self.cmd_data(0xB4, &[0x07]);              // INVCTR
+        self.cmd_data(0xB4, &[0x07]); // INVCTR
         self.cmd_data(0xC0, &[0xA2, 0x02, 0x84]); // PWCTR1
-        self.cmd_data(0xC1, &[0xC5]);             // PWCTR2
-        self.cmd_data(0xC2, &[0x0A, 0x00]);       // PWCTR3
-        self.cmd_data(0xC3, &[0x8A, 0x2A]);       // PWCTR4
-        self.cmd_data(0xC4, &[0x8A, 0xEE]);       // PWCTR5
-        self.cmd_data(0xC5, &[0x0E]);             // VMCTR1
-        self.cmd(0x20);                           // INVOFF
-        self.cmd_data(0x3A, &[0x05]);             // COLMOD: RGB565
-        self.cmd_data(0x36, &[0x68]);             // MADCTL: landscape + BGR
-        self.cmd(0x29); FreeRtos::delay_ms(200);  // DISPON
+        self.cmd_data(0xC1, &[0xC5]); // PWCTR2
+        self.cmd_data(0xC2, &[0x0A, 0x00]); // PWCTR3
+        self.cmd_data(0xC3, &[0x8A, 0x2A]); // PWCTR4
+        self.cmd_data(0xC4, &[0x8A, 0xEE]); // PWCTR5
+        self.cmd_data(0xC5, &[0x0E]); // VMCTR1
+        self.cmd(0x20); // INVOFF
+        self.cmd_data(0x3A, &[0x05]); // COLMOD: RGB565
+        self.cmd_data(0x36, &[0x68]); // MADCTL: landscape + BGR
+        self.cmd(0x29);
+        FreeRtos::delay_ms(200); // DISPON
     }
 }
 
@@ -118,10 +125,15 @@ impl<S: SpiDevice + Send, DC: OutputPin + Send> DisplayOps for RawST7735<S, DC> 
         self.set_full_frame_window();
         let [hi, lo] = color.to_be_bytes();
         let mut row = [0u8; W * 2];
-        for i in 0..W { row[i*2] = hi; row[i*2+1] = lo; }
+        for i in 0..W {
+            row[i * 2] = hi;
+            row[i * 2 + 1] = lo;
+        }
         self.cmd(0x2C);
         let _ = self.dc.set_high();
-        for _ in 0..H { let _ = self.spi.write(&row); }
+        for _ in 0..H {
+            let _ = self.spi.write(&row);
+        }
     }
 
     fn flush_frame(&mut self, fb: &[u8; FB_BYTES]) {
@@ -166,25 +178,35 @@ where
 
     info!("display: hardware reset");
     let mut rst_drv = PinDriver::output(rst)?;
-    rst_drv.set_high()?; FreeRtos::delay_ms(20);
-    rst_drv.set_low()?;  FreeRtos::delay_ms(20);
-    rst_drv.set_high()?; FreeRtos::delay_ms(150);
+    rst_drv.set_high()?;
+    FreeRtos::delay_ms(20);
+    rst_drv.set_low()?;
+    FreeRtos::delay_ms(20);
+    rst_drv.set_high()?;
+    FreeRtos::delay_ms(150);
     core::mem::forget(rst_drv);
 
     info!("display: starting SPI");
     let spi_dev = SpiDeviceDriver::new_single(
-        spi, sclk, mosi,
+        spi,
+        sclk,
+        mosi,
         Option::<AnyIOPin>::None,
         Some(cs),
         &SpiDriverConfig::new().dma(Dma::Auto(SPI_DMA_BUF_BYTES)),
         // polling(false) = interrupt-driven: thread sleeps during 5ms DMA flush,
         // allowing FreeRTOS IDLE to run and reset the Task Watchdog Timer.
-        &SpiConfig::new().baudrate(SPI_FREQ_MHZ.MHz().into()).polling(false),
+        &SpiConfig::new()
+            .baudrate(SPI_FREQ_MHZ.MHz().into())
+            .polling(false),
     )?;
     let dc_drv = PinDriver::output(dc)?;
 
     info!("display: initialising panel");
-    let mut raw = RawST7735 { spi: spi_dev, dc: dc_drv };
+    let mut raw = RawST7735 {
+        spi: spi_dev,
+        dc: dc_drv,
+    };
     raw.init();
     raw.set_full_frame_window();
     raw.fill_solid(0x0000); // clear to black
@@ -193,9 +215,10 @@ where
     let mode: SharedMode = Arc::new(AtomicU8::new(MODE_BASIC));
 
     basic::register(server, shared.clone(), mode.clone())?;
-    renderer::register(server, shared.clone(), mode.clone())?;
+    wireframe_renderer::register(server, shared.clone(), mode.clone())?;
+    shader_renderer::register(server, shared.clone(), mode.clone())?;
 
-    // Mode switch: GET /api/display/mode?set=basic|renderer
+    // Mode switch: GET /api/display/mode?set=basic|wireframe|shader
     {
         let mode = mode.clone();
         server.fn_handler(
@@ -203,20 +226,25 @@ where
             esp_idf_svc::http::Method::Get,
             move |req| {
                 let uri = req.uri().to_string();
-                let set = uri.split('?').nth(1)
+                let set = uri
+                    .split('?')
+                    .nth(1)
                     .and_then(|q| q.split('&').find(|p| p.starts_with("set=")))
                     .and_then(|p| p.strip_prefix("set="))
                     .unwrap_or("basic");
-                let new_mode = if set == "renderer" { MODE_RENDERER } else { MODE_BASIC };
-                mode.store(new_mode, Ordering::Relaxed);
-                let json: &[u8] = if new_mode == MODE_RENDERER {
-                    br#"{"mode":"renderer"}"#
-                } else {
-                    br#"{"mode":"basic"}"#
+                let new_mode = match set {
+                    "shader" => MODE_SHADER,
+                    "wireframe" | "renderer" => MODE_RENDERER,
+                    _ => MODE_BASIC,
                 };
-                let mut resp = req.into_response(
-                    200, Some("OK"), &[("Content-Type", "application/json")],
-                )?;
+                mode.store(new_mode, Ordering::Relaxed);
+                let json: &[u8] = match new_mode {
+                    MODE_SHADER => br#"{"mode":"shader"}"#,
+                    MODE_RENDERER => br#"{"mode":"wireframe"}"#,
+                    _ => br#"{"mode":"basic"}"#,
+                };
+                let mut resp =
+                    req.into_response(200, Some("OK"), &[("Content-Type", "application/json")])?;
                 resp.write(json)?;
                 Ok::<(), anyhow::Error>(())
             },
@@ -228,6 +256,7 @@ where
     // Inject submodule HTML fragments at compile time.
     let card = CARD_HTML
         .replace("{{BASIC_CARD}}", basic::CARD_HTML)
-        .replace("{{RENDERER_CARD}}", renderer::CARD_HTML);
+        .replace("{{RENDERER_CARD}}", wireframe_renderer::CARD_HTML)
+        .replace("{{SHADER_CARD}}", shader_renderer::CARD_HTML);
     Ok(card)
 }

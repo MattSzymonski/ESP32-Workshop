@@ -17,6 +17,16 @@ opt-level = "s"
 debug = true    # Symbols are nice, and they don't increase the size on Flash
 opt-level = "z"
 
+# Even in dev builds, optimise the renderer hot path (and a few math-heavy crates)
+# at -O3 — without this, the software-float inner loop on the ESP32-C6 (no FPU)
+# is ~10× slower because LLVM at opt-level="z" disables loop & integer optimisations.
+[profile.dev.package.http_server_playground]
+opt-level = 3
+[profile.dev.package.libm]
+opt-level = 3
+[profile.dev.package.compiler_builtins]
+opt-level = 3
+
 [patch.crates-io]
 esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal.git" }
 esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc.git" }

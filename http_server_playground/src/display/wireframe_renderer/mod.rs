@@ -331,7 +331,12 @@ pub(super) fn register(
     std::thread::Builder::new()
         .stack_size(8192)
         .spawn(move || {
-            let mut framebuffer: Box<[u8; FB_BYTES]> = Box::new([0u8; FB_BYTES]);
+            // Allocate the 25 KB framebuffer on the heap via Vec to avoid the
+            // `Box::new([_; N])` stack copy (would overflow this thread's stack).
+            let mut framebuffer: Box<[u8; FB_BYTES]> = vec![0u8; FB_BYTES]
+                .into_boxed_slice()
+                .try_into()
+                .expect("framebuffer length mismatch");
             let mut angle_x = 0.0f32;
             let mut angle_y = 0.0f32;
             let mut angle_z = 0.0f32;
