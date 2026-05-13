@@ -132,3 +132,89 @@ h1 {
     min-height: 1.2em;
     font-weight: 500;
 }
+
+/* ===== Gamepad tester ===== */
+
+/* Allow a wider card so the screenshot layout fits */
+.module-card--wide { max-width: 100%; }
+main:has(.module-card--wide) { max-width: 980px; }
+
+.gp-tester {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 20px;
+    align-items: start;
+}
+
+.gp-label {
+    display: block;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+
+.gp-meta {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px 16px;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.gp-buttons {
+    display: grid;
+    grid-template-columns: repeat(9, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.gp-btn {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-size: 11px;
+    line-height: 1.15;
+    color: var(--text);
+    transition: background 0.1s, border-color 0.1s;
+}
+
+.gp-btn--on {
+    background: var(--accent);
+    color: #111;
+    border-color: var(--accent);
+}
+
+.gp-btn--on .gp-label { color: #111; }
+
+.gp-sticks {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.gp-stick-block { display: flex; flex-direction: column; gap: 6px; }
+.gp-stick-title { font-size: 11px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; }
+.gp-stick-row { display: flex; gap: 12px; align-items: center; }
+.gp-stick-axes { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.gp-stick { width: 80px; height: 80px; flex-shrink: 0; }
+.gp-stick-bg { fill: none; stroke: var(--border); stroke-width: 0.04; }
+.gp-stick-cross { stroke: var(--border); stroke-width: 0.02; }
+.gp-stick-dot { fill: var(--accent); }
+
+.gp-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* Right column gamepad silhouette */
+.gp-right { display: flex; justify-content: center; }
+.gp-icon { width: 100%; max-width: 260px; height: auto; }
+.gp-svg-stroke { stroke: var(--border); stroke-width: 1.2; fill: none; }
+.gp-svg-stroke circle, .gp-svg-stroke rect { fill: transparent; }
+.gp-svg-on { fill: var(--accent) !important; stroke: var(--accent) !important; }
+
+@media (max-width: 760px) {
+    .gp-tester { grid-template-columns: 1fr; }
+    .gp-meta { grid-template-columns: repeat(2, 1fr); }
+    .gp-buttons { grid-template-columns: repeat(6, 1fr); }
+}

@@ -47,3 +47,13 @@ ws2812-esp32-rmt-driver = { git = "https://github.com/cat-in-136/ws2812-esp32-rm
 
 [build-dependencies]
 embuild = "0.33"
+
+# Tell esp-idf-sys to apply our sdkconfig overrides (the file is otherwise
+# silently ignored on some embuild versions when no metadata block is given),
+# and to compile the local `gamepad_bt` C component (a 1-function trampoline
+# that exposes BT_CONTROLLER_INIT_CONFIG_DEFAULT() to Rust).
+[package.metadata.esp-idf-sys]
+esp_idf_sdkconfig_defaults = ["sdkconfig.defaults"]
+extra_components = [
+    { component_dirs = ["components/gamepad_bt"] },
+]

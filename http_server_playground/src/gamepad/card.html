@@ -1,0 +1,192 @@
+<div class="module-card module-card--wide">
+    <h2>Gamepad</h2>
+    <p>BLE HID host — pair an 8BitDo Ultimate 2C (BLE / Switch mode)</p>
+
+    <div class="gp-tester">
+        <!-- ===== Left column: metadata, buttons, sticks, controls ===== -->
+        <div class="gp-left">
+            <!-- Top metadata row -->
+            <div class="gp-meta">
+                <div><span class="gp-label">INDEX</span><span id="gp-index">0</span></div>
+                <div><span class="gp-label">CONNECTED</span><span id="gp-connected">No</span></div>
+                <div><span class="gp-label">MAPPING</span><span id="gp-mapping">standard</span></div>
+                <div><span class="gp-label">TIMESTAMP</span><span id="gp-timestamp">0.00000</span></div>
+                <div><span class="gp-label">VIBRATION</span><span id="gp-vibration">No</span></div>
+            </div>
+
+            <!-- Buttons grid (B0..B16) -->
+            <div class="gp-buttons" id="gp-buttons"></div>
+
+            <!-- Sticks -->
+            <div class="gp-sticks">
+                <div class="gp-stick-block">
+                    <div class="gp-stick-title">L STICK</div>
+                    <div class="gp-stick-row">
+                        <div class="gp-stick-axes">
+                            <div><span class="gp-label">AXIS 0</span><span id="gp-axis-0">0.00000</span></div>
+                            <div><span class="gp-label">AXIS 1</span><span id="gp-axis-1">0.00000</span></div>
+                        </div>
+                        <svg class="gp-stick" viewBox="-1.2 -1.2 2.4 2.4">
+                            <circle cx="0" cy="0" r="1" class="gp-stick-bg" />
+                            <line x1="-1" y1="0" x2="1" y2="0" class="gp-stick-cross" />
+                            <line x1="0" y1="-1" x2="0" y2="1" class="gp-stick-cross" />
+                            <circle id="gp-stick-l-dot" cx="0" cy="0" r="0.1" class="gp-stick-dot" />
+                        </svg>
+                    </div>
+                </div>
+                <div class="gp-stick-block">
+                    <div class="gp-stick-title">R STICK</div>
+                    <div class="gp-stick-row">
+                        <div class="gp-stick-axes">
+                            <div><span class="gp-label">AXIS 2</span><span id="gp-axis-2">0.00000</span></div>
+                            <div><span class="gp-label">AXIS 3</span><span id="gp-axis-3">0.00000</span></div>
+                        </div>
+                        <svg class="gp-stick" viewBox="-1.2 -1.2 2.4 2.4">
+                            <circle cx="0" cy="0" r="1" class="gp-stick-bg" />
+                            <line x1="-1" y1="0" x2="1" y2="0" class="gp-stick-cross" />
+                            <line x1="0" y1="-1" x2="0" y2="1" class="gp-stick-cross" />
+                            <circle id="gp-stick-r-dot" cx="0" cy="0" r="0.1" class="gp-stick-dot" />
+                        </svg>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="gp-actions">
+                <button onclick="gamepadStartScan()">Scan / Pair</button>
+                <button onclick="gamepadDisconnect()">Disconnect</button>
+                <span id="gp-status" class="status"></span>
+            </div>
+        </div>
+
+        <!-- ===== Right column: gamepad silhouette ===== -->
+        <div class="gp-right">
+            <svg class="gp-icon" viewBox="0 0 200 130">
+                <!-- Triggers -->
+                <rect id="gp-svg-L2" x="35" y="3"  width="22" height="18" rx="6" class="gp-svg-stroke" />
+                <rect id="gp-svg-R2" x="143" y="3" width="22" height="18" rx="6" class="gp-svg-stroke" />
+                <rect id="gp-svg-L1" x="32" y="14" width="28" height="12" rx="6" class="gp-svg-stroke" />
+                <rect id="gp-svg-R1" x="140" y="14" width="28" height="12" rx="6" class="gp-svg-stroke" />
+
+                <!-- Body -->
+                <path d="M 30 30 Q 5 35 10 95 Q 14 120 50 115 L 150 115 Q 186 120 190 95 Q 195 35 170 30 Z"
+                    class="gp-svg-stroke" fill="none" />
+
+                <!-- Left stick (large left circle) -->
+                <circle id="gp-svg-LS" cx="50" cy="65" r="14" class="gp-svg-stroke" />
+                <!-- Right stick (large right-bottom circle) -->
+                <circle id="gp-svg-RS" cx="125" cy="90" r="14" class="gp-svg-stroke" />
+
+                <!-- Select / Start (small middle circles) -->
+                <circle id="gp-svg-SELECT" cx="82" cy="65" r="3" class="gp-svg-stroke" />
+                <circle id="gp-svg-START"  cx="98" cy="65" r="3" class="gp-svg-stroke" />
+
+                <!-- D-pad (left-bottom cross) -->
+                <g id="gp-svg-DPAD" class="gp-svg-stroke">
+                    <circle cx="75" cy="90" r="14" />
+                    <rect id="gp-svg-DUP"    x="72" y="80" width="6" height="6" />
+                    <rect id="gp-svg-DDOWN"  x="72" y="94" width="6" height="6" />
+                    <rect id="gp-svg-DLEFT"  x="65" y="87" width="6" height="6" />
+                    <rect id="gp-svg-DRIGHT" x="79" y="87" width="6" height="6" />
+                </g>
+
+                <!-- Face buttons (right-top cross) -->
+                <g class="gp-svg-stroke">
+                    <circle cx="150" cy="65" r="14" />
+                    <circle id="gp-svg-A" cx="150" cy="74" r="3" />
+                    <circle id="gp-svg-B" cx="158" cy="65" r="3" />
+                    <circle id="gp-svg-X" cx="142" cy="65" r="3" />
+                    <circle id="gp-svg-Y" cx="150" cy="56" r="3" />
+                </g>
+            </svg>
+        </div>
+    </div>
+
+    <script>
+        // --- Build the B0..B16 grid once ---------------------------------
+        (function buildButtons() {
+            var grid = document.getElementById('gp-buttons');
+            for (var i = 0; i < 17; i++) {
+                var cell = document.createElement('div');
+                cell.className = 'gp-btn';
+                cell.innerHTML =
+                    '<span class="gp-label">B' + i + '</span>' +
+                    '<span id="gp-b-' + i + '">0.00</span>';
+                grid.appendChild(cell);
+            }
+        })();
+
+        // --- Map button index -> SVG element id (best-effort, standard layout) ---
+        var GP_BTN_SVG = {
+            0: 'gp-svg-A', 1: 'gp-svg-B', 2: 'gp-svg-X', 3: 'gp-svg-Y',
+            4: 'gp-svg-L1', 5: 'gp-svg-R1', 6: 'gp-svg-L2', 7: 'gp-svg-R2',
+            8: 'gp-svg-SELECT', 9: 'gp-svg-START',
+            10: 'gp-svg-LS', 11: 'gp-svg-RS',
+            12: 'gp-svg-DUP', 13: 'gp-svg-DDOWN',
+            14: 'gp-svg-DLEFT', 15: 'gp-svg-DRIGHT'
+        };
+
+        function gamepadRenderState(s) {
+            document.getElementById('gp-index').textContent = s.index;
+            document.getElementById('gp-connected').textContent = s.connected ? 'Yes' : 'No';
+            document.getElementById('gp-mapping').textContent = s.mapping || 'standard';
+            document.getElementById('gp-timestamp').textContent = s.timestamp.toFixed(5);
+            document.getElementById('gp-vibration').textContent = s.vibration ? 'Yes' : 'No';
+
+            // Buttons
+            for (var i = 0; i < 17; i++) {
+                var v = (s.buttons && s.buttons[i]) || 0;
+                var el = document.getElementById('gp-b-' + i);
+                if (el) {
+                    el.textContent = v.toFixed(2);
+                    el.parentElement.classList.toggle('gp-btn--on', v > 0.5);
+                }
+                var svgId = GP_BTN_SVG[i];
+                if (svgId) {
+                    var svgEl = document.getElementById(svgId);
+                    if (svgEl) svgEl.classList.toggle('gp-svg-on', v > 0.5);
+                }
+            }
+
+            // Axes
+            var axes = s.axes || [0, 0, 0, 0];
+            for (var a = 0; a < 4; a++) {
+                var el = document.getElementById('gp-axis-' + a);
+                if (el) el.textContent = (axes[a] || 0).toFixed(5);
+            }
+            var ld = document.getElementById('gp-stick-l-dot');
+            if (ld) { ld.setAttribute('cx', axes[0] || 0); ld.setAttribute('cy', axes[1] || 0); }
+            var rd = document.getElementById('gp-stick-r-dot');
+            if (rd) { rd.setAttribute('cx', axes[2] || 0); rd.setAttribute('cy', axes[3] || 0); }
+        }
+
+        async function gamepadPoll() {
+            try {
+                var data = await fetch('/api/gamepad').then(r => r.json());
+                gamepadRenderState(data);
+            } catch (e) { /* ignore transient errors */ }
+        }
+
+        async function gamepadStartScan() {
+            var s = document.getElementById('gp-status');
+            s.textContent = 'Scanning…';
+            try {
+                var r = await fetch('/api/gamepad/scan').then(r => r.json());
+                s.textContent = r.message || 'Scan started';
+            } catch (e) { s.textContent = 'Scan failed'; }
+            setTimeout(function () { s.textContent = ''; }, 2500);
+        }
+
+        async function gamepadDisconnect() {
+            var s = document.getElementById('gp-status');
+            try {
+                var r = await fetch('/api/gamepad/disconnect').then(r => r.json());
+                s.textContent = r.message || 'Disconnected';
+            } catch (e) { s.textContent = 'Disconnect failed'; }
+            setTimeout(function () { s.textContent = ''; }, 2000);
+        }
+
+        setInterval(gamepadPoll, 50);
+        gamepadPoll();
+    </script>
+</div>

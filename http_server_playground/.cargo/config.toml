@@ -16,3 +16,18 @@ ESP_IDF_PATH_ISSUES = "warn"
 # Relocate ESP-IDF toolchain (gcc, cmake, python venv) to a short path.
 # esp-idf-sys reads ESP_IDF_TOOLS_INSTALL_DIR; "custom:<path>" means install there.
 ESP_IDF_TOOLS_INSTALL_DIR = "custom:C:\\esp\\tools"
+# Force esp-idf-sys to apply our sdkconfig overrides. The manifest-metadata
+# fallback was unreliable on this embuild snapshot; this env var is honoured
+# unconditionally.
+ESP_IDF_SDKCONFIG_DEFAULTS = { value = "sdkconfig.defaults", relative = true }
+# embuild::cargo::workspace_dir() derives the workspace root by walking 6 dirs
+# up from OUT_DIR. With our custom CARGO_TARGET_DIR (D:\cargo-target, outside
+# the project), that heuristic resolves to the wrong directory and esp-idf-sys
+# silently fails to read `[package.metadata.esp-idf-sys]` from Cargo.toml —
+# meaning `extra_components` (which pulls in our gamepad_bt C trampoline)
+# never takes effect. Pinning CARGO_WORKSPACE_DIR fixes that.
+CARGO_WORKSPACE_DIR = { value = ".", relative = true }
+# Note: extra IDF components are pulled in via
+# `[package.metadata.esp-idf-sys].extra_components` in Cargo.toml — the
+# raw EXTRA_COMPONENT_DIRS env var is NOT propagated to esp-idf-sys's
+# CMake invocation in this embuild snapshot.

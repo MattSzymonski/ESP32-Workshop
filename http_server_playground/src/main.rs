@@ -1,13 +1,19 @@
 // This file is the application entry point for the ESP-IDF-based modular HTTP server.
 // - Connects to Wi-Fi using credentials from env.rs, then starts an EspHttpServer.
-// - Delegates hardware control to eight submodules: led, servo, solar, buzzer, button, ultrasonic, joystick, and display.
+// - Delegates hardware control to nine submodules: led, servo, solar, buzzer, button, ultrasonic, joystick, display, and gamepad (BLE HID).
 // - Each submodule registers its own HTTP API endpoints and returns an HTML card snippet.
 // - Assembles the final web page by injecting all module cards into the index.html template.
 // - Serves the page on GET /, the stylesheet on GET /style.css, and a ping on GET /health.
 
+// `esp_idf_svc::sys::*` glob-imports a `log` C module that shadows the `log`
+// crate inside function bodies. We re-import the crate under a distinct name
+// at the crate root so qualified paths (`log_crate::warn!`) work everywhere.
+extern crate log as log_crate;
+
 mod button;
 mod buzzer;
 mod display;
+mod gamepad;
 mod joystick;
 mod led;
 mod servo;
@@ -24,7 +30,7 @@ use esp_idf_svc::sys::*;
 use esp_idf_svc::wifi::{
     BlockingWifi, ClientConfiguration, Configuration as WifiConfiguration, EspWifi, WifiEvent,
 };
-use log::info;
+use log_crate::info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -132,7 +138,7 @@ fn main() -> anyhow::Result<()> {
         };
 
         if !associated {
-            log::warn!("WiFi association failed, retrying...");
+            log_crate::warn!("WiFi association failed, retrying...");
             wifi.wifi_mut().disconnect().ok();
             // Short pause so the AP can clear its stale auth state.
             std::thread::sleep(Duration::from_millis(300));
@@ -145,7 +151,7 @@ fn main() -> anyhow::Result<()> {
             Ok(_) => break, // IP obtained — exit the retry loop
             Err(e) => {
                 // DHCP timed out — disconnect and retry from the top
-                log::warn!("WiFi DHCP failed ({:?}), retrying...", e);
+                log_crate::warn!("WiFi DHCP failed ({:?}), retrying...", e);
                 wifi.wifi_mut().disconnect().ok();
                 std::thread::sleep(Duration::from_millis(300));
             }
@@ -166,7 +172,7 @@ fn main() -> anyhow::Result<()> {
 
     // 11. Create the HTTP server with default configuration
     let mut server = EspHttpServer::new(&HttpServerConfig {
-        max_uri_handlers: 20,
+        max_uri_handlers: 24,
         ..Default::default()
     })?;
 
@@ -238,8 +244,18 @@ fn main() -> anyhow::Result<()> {
             peripherals.pins.gpio7.into(),  // BL, BLK
         )?;
 
-        let modules_html = format!(
-            "{}{}{}{}{}{}{}{}",
+        // 11i. Gamepad over BLE HID host (8BitDo Ultimate 2C in BLE / Switch mode).
+        //      No peripheral pins — the BT controller owns the radio internally.
+        let gamepad_html = gamepad::register(&mut server)?;
+
+        // Collect each module's card HTML into a `Vec<String>`. We deliberately
+        // do *not* concatenate them into a single big String here — with BT
+        // enabled the heap is tight enough that the temporary 50+ KB
+        // allocation `INDEX_HTML.replace("{{MODULES}}", &all_cards)` would
+        // produce was reliably failing on boot. Instead we split the page
+        // template at the placeholder once and stream {prefix, cards…, suffix}
+        // chunk-by-chunk in the request handler (see step 12a).
+        let cards: Arc<Vec<String>> = Arc::new(vec![
             led_html,
             servo_html,
             solar_html,
@@ -247,23 +263,32 @@ fn main() -> anyhow::Result<()> {
             buzzer_html,
             ultrasonic_html,
             joystick_html,
-            display_html
-        );
-
-        Arc::new(INDEX_HTML.replace("{{MODULES}}", &modules_html))
+            display_html,
+            gamepad_html,
+        ]);
+        let (prefix, suffix) = INDEX_HTML
+            .split_once("{{MODULES}}")
+            .expect("index.html must contain {{MODULES}} placeholder");
+        (Arc::new(prefix.to_string()), Arc::new(suffix.to_string()), cards)
     };
+    let (page_prefix, page_suffix, page_cards) = page_html;
 
     // 12. Register the main page handler and the stylesheet handler, and a simple health check endpoint.
     {
-        // 12a. Handler: GET / — serves the dynamically assembled main HTML page
-        let page_for_handler = page_html.clone();
+        // 12a. Handler: GET / — serves the dynamically assembled main HTML page,
+        //      streamed in chunks (prefix → each card → suffix). See note above
+        //      about why we don't pre-build a single concatenated String.
+        let prefix = page_prefix.clone();
+        let suffix = page_suffix.clone();
+        let cards = page_cards.clone();
         server.fn_handler("/", esp_idf_svc::http::Method::Get, move |req| {
-            // 1. Build response headers
             let headers = [("Content-Type", "text/html; charset=utf-8")];
-            // 2. Open the response stream with HTTP 200
             let mut response = req.into_response(200, Some("OK"), &headers)?;
-            // 3. Write the assembled HTML page
-            response.write(page_for_handler.as_bytes())?;
+            response.write(prefix.as_bytes())?;
+            for card in cards.iter() {
+                response.write(card.as_bytes())?;
+            }
+            response.write(suffix.as_bytes())?;
             Ok::<(), anyhow::Error>(())
         })?;
 
