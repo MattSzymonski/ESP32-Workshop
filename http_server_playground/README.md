@@ -37,8 +37,11 @@ pub const WIFI_PASSWORD: &str = "<YOUR_WIFI_PASSWORD>";
 ## Build & Flash
 
 ```sh
-# Build for the ESP32-C6 target
+# Build for the ESP32-C6 target with all modules enabled (default)
 cargo build --release
+
+# Or build a slim binary with only the modules you need (see Features below)
+cargo build --release --no-default-features --features "led,gamepad"
 
 # Flash and open the serial monitor
 espflash flash --monitor --port COM3 D:\cargo-target\http_server_playground\riscv32imac-esp-espidf\release
@@ -56,59 +59,65 @@ Open that URL in a browser to access the dashboard.
 
 ---
 
+## Features
+
+Every hardware module is gated behind its own Cargo feature so you can compile a slimmer binary that only contains what you need. Disabled modules are not compiled at all — no code, no static framebuffers, no background threads. The big win is in DRAM at runtime, which matters because the ESP32-C6 only has ~336 KiB of free heap after the IDF starts up and a fully-loaded build can leave less than 80 KiB of contiguous block free.
+
+| Feature      | Module                                |
+| ------------ | ------------------------------------- |
+| `led`        | WS2812 onboard RGB LED                |
+| `servo`      | SG90 micro servo                      |
+| `solar`      | Solar panel ADC                       |
+| `button`     | Button press counter                  |
+| `buzzer`     | PWM buzzer                            |
+| `ultrasonic` | HC-SR04 distance sensor               |
+| `joystick`   | 2-axis joystick + push button         |
+| `display`    | ST7735S TFT with renderer sub-modules |
+| `gamepad`    | BLE HID gamepad (8BitDo Ultimate 2C)  |
+
+The `default` feature set enables everything. Disable defaults with `--no-default-features` and add only what you want:
+
+```sh
+# Minimal build: just the LED and the gamepad over BLE
+cargo build --release --no-default-features --features "led,gamepad"
+```
+
+When the `gamepad` feature is disabled the BLE controller is not initialised at all, freeing ~30 KiB of contiguous DRAM otherwise reserved by NimBLE.
+
+---
+
 ## Project Structure
 
 ```text
 src/
   main.rs           — Wi-Fi setup, HTTP server init, idle loop
+  mem.rs            — Heap diagnostics (`mem::report(label)`) for OOM debugging
   env.rs            — Wi-Fi credentials (not committed)
   index.html        — Dashboard HTML template ({{MODULES}} placeholder)
   style.css         — Dashboard styles
-  led/
-    mod.rs          — WS2812 RGB LED module
-    card.html       — Dashboard card HTML for the LED
-  servo/
-    mod.rs          — SG90 micro servo module
-    card.html       — Dashboard card HTML for the servo
-  solar/
-    mod.rs          — Solar panel ADC module
-    card.html       — Dashboard card HTML for the solar panel
-  button/
-    mod.rs          — Button press counter module
-    card.html       — Dashboard card HTML for the button
-  buzzer/
-    mod.rs          — Buzzer module
-    card.html       — Dashboard card HTML for the buzzer
-  ultrasonic/
-    mod.rs          — HC-SR04 ultrasonic distance sensor module
-    card.html       — Dashboard card HTML for the ultrasonic sensor
-  joystick/
-    mod.rs          — Joystick module (VRX/VRY ADC + SW button)
-    card.html       — Dashboard card HTML for the joystick
-  display/
-    mod.rs          — ST7735S SPI TFT display module (parent + mode switch)
-    card.html       — Dashboard card HTML for the display
-    basic/
-      mod.rs        — Text / clear sub-mode
-      card.html     — Sub-card HTML
-    renderer/
-      mod.rs        — Software 3-D renderer sub-mode
-      card.html     — Sub-card HTML
+  led/              — WS2812 RGB LED module
+  servo/            — SG90 micro servo module
+  solar/            — Solar panel ADC module
+  button/           — Button press counter module
+  buzzer/           — Buzzer module
+  ultrasonic/       — HC-SR04 ultrasonic distance sensor module
+  joystick/         — Joystick module (VRX/VRY ADC + SW button)
+  gamepad/          — BLE HID gamepad module (8BitDo Ultimate 2C)
+  display/          — ST7735S SPI TFT display module
+    basic/          —   text / clear sub-mode
+    wireframe_renderer/  —   software 3-D wireframe sub-mode
+    shader_renderer/     —   software shader sub-mode
 ```
 
-Each module exposes a single:
-
-```rust
-pub fn register(server, ...peripherals...) -> anyhow::Result<String>
-```
-
-function that:
+Each module exposes a `register(server, ...peripherals...)` function (gated on its Cargo feature) that:
 
 1. Initialises the hardware driver
 2. Registers one or more HTTP API endpoints on the server
 3. Returns an HTML card string (from `card.html`) to be embedded in the dashboard
 
-To add a new module, create a new subdirectory following the same pattern, call `register()` in `main.rs`, and concatenate the returned HTML card into `modules_html`.
+The dashboard is **streamed** rather than rendered into one big string — the template is split once at the `{{MODULES}}` placeholder, each module card is kept as its own `Arc<str>`, and the HTTP handler writes them prefix → cards → suffix. This avoids a ~57 KiB contiguous allocation that would fail when DRAM is fragmented.
+
+To add a new module, create a subdirectory following the same pattern, gate `mod xxx;` behind a feature, and conditionally call `register()` from `main.rs`.
 
 ---
 
@@ -529,6 +538,74 @@ ESP32-C6-DevKitC-1        ST7735S display
 
 ---
 
+### BLE HID Gamepad (`src/gamepad/`)
+
+Connects to a Bluetooth Low Energy HID gamepad — primarily targeted at the **8BitDo Ultimate 2C** in **B (Bluetooth)** mode (slide-switch position B). No GPIO pins are used; the controller is paired over the on-board BLE radio via the **NimBLE** stack (the `esp32-nimble` crate).
+
+| Property       | Value                                                |
+| -------------- | ---------------------------------------------------- |
+| GPIO           | none — uses the on-board BLE radio                   |
+| BLE service    | HID-over-GATT (`0x1812`)                             |
+| Pairing        | Just-Works (NoInputNoOutput, bonded)                 |
+| Auto-reconnect | yes — outer loop re-scans on disconnect              |
+| Coexists with  | Wi-Fi (the C6 modem is shared between Wi-Fi and BLE) |
+
+The module spawns a dedicated `gamepad-ble` thread (BLE objects are `!Send`), scans for any device whose advertised name contains `8BitDo`, `Ultimate`, `Controller`, or `Gamepad`, connects, subscribes to every notifying HID Report characteristic, and forwards the latest input report bytes to the dashboard. It also remembers any **writable** Report characteristics and uses them to deliver vibration commands.
+
+> **Init order matters.** The BLE controller must be initialised *before* Wi-Fi. Wi-Fi grabs ~80 KiB of contiguous DRAM the moment `EspWifi::new` is called, leaving the heap too fragmented for `r_ble_controller_init`'s ~30 KiB allocation. `main.rs` calls `BLEDevice::take()` first to claim that block while the heap is still pristine. The actual scan/connect state machine is started later, after the page parts are built, so NimBLE's mbuf allocations don't fragment the page-streaming buffers.
+
+### API endpoints
+
+```text
+GET /api/gamepad
+```
+
+Returns a JSON snapshot of the latest input report:
+
+```json
+{
+  "connected": true,
+  "name":      "8BitDo Ultimate 2C",
+  "addr":      "...",
+  "ts":        1234567,
+  "report":    "<hex bytes>",
+  "reportMap": "<hex bytes — HID descriptor, read once>"
+}
+```
+
+The browser-side card decodes `report` into 4 axes, 2 analog triggers, a D-pad hat, and 11 buttons (A, B, X, Y, LB, RB, View, Menu, L3, R3, Home). It auto-detects the layout from the report length:
+
+| Length     | Layout                                                   | Axes / triggers               | Buttons               |
+| ---------- | -------------------------------------------------------- | ----------------------------- | --------------------- |
+| 7–11 bytes | Android-style (default for 8BitDo Ultimate 2C in B mode) | 8-bit unsigned, center `0x80` | bytes 7 + 8 bitmaps   |
+| ≥ 12 bytes | Xbox One BLE HID                                         | 16-bit LE, center `0x8000`    | bytes 13 + 14 bitmaps |
+
+The card always shows the raw bytes at the bottom for diagnostics, so if your specific firmware uses a different layout you can re-derive the bit assignments quickly.
+
+```text
+GET /api/gamepad/vibrate
+```
+
+Triggers a 1-second rumble on both motors. Sends the standard 8-byte **Xbox-style BLE rumble output report** (`[0x0F, 0, 0, 80, 80, 100, 0, 0]`) to every writable HID Report characteristic on the device. The 8BitDo Ultimate 2C in B mode accepts this format. If the controller does not expose a writable Report or uses a different rumble protocol, the write either fails silently or has no effect — the request is one-shot fire-and-forget.
+
+Response:
+
+```json
+{"ok":true}
+```
+
+### Pairing / wiring
+
+There is no wiring. To pair:
+
+1. Slide the mode switch on the back of the **8BitDo Ultimate 2C** to position **B**.
+2. Hold the **Start** button until the LED ring starts pulsing — the controller is in BLE pairing mode.
+3. Power the ESP32. Within a few seconds the dashboard's Gamepad card should turn green and show the controller name.
+
+After the first pairing the controller is bonded and reconnects automatically on subsequent boots.
+
+---
+
 ## Reserved GPIO pins (ESP32-C6-DevKitC-1)
 
 The following pins are reserved by the board hardware and **must not be used as GPIO outputs**:
@@ -546,7 +623,7 @@ The following pins are reserved by the board hardware and **must not be used as 
 
 ## Dashboard
 
-The dashboard at `http://<device-ip>/` is assembled at boot by substituting module HTML cards into the `{{MODULES}}` placeholder in `src/index.html`.
+The dashboard at `http://<device-ip>/` is assembled at boot by streaming the `index.html` template, each enabled module's HTML card, and the template suffix as separate response chunks (no single-big-string concatenation).
 
 Additional endpoints always available:
 

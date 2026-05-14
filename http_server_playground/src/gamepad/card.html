@@ -1,0 +1,347 @@
+<div class="module-card gamepad-card">
+    <h2>Gamepad</h2>
+    <p>BLE HID controller (8BitDo Ultimate 2C in <em>B</em> mode) over the on-board Bluetooth LE radio.</p>
+
+    <!-- Top status row -->
+    <div class="gp-status-row">
+        <div class="gp-stat">
+            <span class="gp-stat-label">INDEX</span>
+            <span class="gp-stat-val" id="gp-index">0</span>
+        </div>
+        <div class="gp-stat">
+            <span class="gp-stat-label">CONNECTED</span>
+            <span class="gp-stat-val" id="gp-connected">No</span>
+        </div>
+        <div class="gp-stat">
+            <span class="gp-stat-label">MAPPING</span>
+            <span class="gp-stat-val" id="gp-mapping">8BitDo-B</span>
+        </div>
+        <div class="gp-stat">
+            <span class="gp-stat-label">TIMESTAMP</span>
+            <span class="gp-stat-val" id="gp-timestamp">0.00000</span>
+        </div>
+    </div>
+
+    <!-- Secondary row -->
+    <div class="gp-status-row gp-status-row-2">
+        <div class="gp-stat">
+            <span class="gp-stat-label">Pose</span>
+            <span class="gp-stat-val gp-stat-dim">n/a</span>
+        </div>
+        <div class="gp-stat">
+            <span class="gp-stat-label">HapticActuators</span>
+            <span class="gp-stat-val gp-stat-dim">n/a</span>
+        </div>
+        <div class="gp-stat">
+            <span class="gp-stat-label">Hand</span>
+            <span class="gp-stat-val gp-stat-dim">n/a</span>
+        </div>
+        <div class="gp-stat">
+            <span class="gp-stat-label">DisplayId</span>
+            <span class="gp-stat-val gp-stat-dim">n/a</span>
+        </div>
+        <div class="gp-stat">
+            <span class="gp-stat-label">Vibration</span>
+            <span class="gp-stat-val" id="gp-vibration">Yes</span>
+        </div>
+        <div class="gp-stat gp-stat-actions">
+            <span class="gp-stat-label gp-stat-test">Test</span>
+            <button type="button" class="gp-vibrate-btn" id="gp-vibrate">Vibration</button>
+        </div>
+    </div>
+
+    <!-- Buttons grid -->
+    <div class="gp-buttons" id="gp-buttons"></div>
+
+    <!-- Axes grid (LX LY RX RY LT RT) -->
+    <div class="gp-axes" id="gp-axes"></div>
+
+    <!-- Stick circles + controller silhouette -->
+    <div class="gp-bottom-row">
+        <div class="gp-sticks">
+            <svg width="120" height="120" viewBox="0 0 120 120" class="gp-stick">
+                <circle cx="60" cy="60" r="50" fill="none" stroke="#444" stroke-width="2" />
+                <circle id="gp-stick-l" cx="60" cy="60" r="6" fill="#7a7a7a" />
+            </svg>
+            <svg width="120" height="120" viewBox="0 0 120 120" class="gp-stick">
+                <circle cx="60" cy="60" r="50" fill="none" stroke="#444" stroke-width="2" />
+                <circle id="gp-stick-r" cx="60" cy="60" r="6" fill="#7a7a7a" />
+            </svg>
+        </div>
+        <svg viewBox="0 0 260 170" class="gp-silhouette">
+            <g fill="none" stroke="#3a3a3a" stroke-width="2.5" stroke-linejoin="round">
+                <path
+                    d="M55,45 C20,50 8,90 18,130 C25,155 55,158 75,140 L100,115 H160 L185,140 C205,158 235,155 242,130 C252,90 240,50 205,45 C175,42 155,55 130,55 C105,55 85,42 55,45 Z" />
+                <path d="M55,40 Q70,28 95,32" stroke-linecap="round" />
+                <path d="M205,40 Q190,28 165,32" stroke-linecap="round" />
+                <circle cx="70" cy="78" r="14" />
+                <rect x="86" y="100" width="28" height="10" rx="2" />
+                <rect x="95" y="91" width="10" height="28" rx="2" />
+                <circle cx="160" cy="108" r="14" />
+                <circle cx="200" cy="65" r="8" />
+                <circle cx="220" cy="80" r="8" />
+                <circle cx="200" cy="95" r="8" />
+                <circle cx="180" cy="80" r="8" />
+            </g>
+        </svg>
+    </div>
+
+    <!-- Raw bytes -->
+    <div class="gp-raw-header">Raw bytes (hex &amp; decimal)</div>
+    <div class="gp-raw-grid" id="gp-raw-grid"></div>
+
+    <!-- Diagnostics / status line -->
+    <div class="gp-diagnostics">
+        <span class="gp-meta" id="gp-meta">Waiting for controller&hellip;</span>
+    </div>
+
+    <script>
+        (function () {
+            // ---- Confirmed report layout (8BitDo Ultimate 2C, B-mode) ----------
+            //   B0   D-pad hat  : 0=Up 1=UpR 2=Right 3=DnR 4=Down 5=DnL 6=Left 7=UpL 0xF=neutral
+            //   B1   LX         : uint8, center 0x80
+            //   B2   LY         : uint8, center 0x80
+            //   B3   RX         : uint8, center 0x80
+            //   B4   RY         : uint8, center 0x80
+            //   B5   RT analog  : 0x00..0xFF
+            //   B6   LT analog  : 0x00..0xFF
+            //   B7   buttons    : bit0=A  bit1=B  bit2=?  bit3=X  bit4=Y  bit5=?  bit6=LB  bit7=RB
+            //   B8   buttons    : bit0=LT-dig  bit1=RT-dig  bit2=View  bit3=Menu
+            //                     bit4=Home  bit5=L3  bit6=R3  bit7=?
+
+            var BTN_NAMES = [
+                'A', 'B', 'X', 'Y',                         // 0-3
+                'LB', 'RB', 'LT\u25cf', 'RT\u25cf',         // 4-7  (LT/RT digital)
+                '?B7b2', '?B7b5',                         // 8-9  (unconfirmed)
+                'View', 'Menu', 'Home', 'L3', 'R3',           // 10-14
+                '?B8b7',                                 // 15   (unknown)
+                'D\u2191', 'D\u2192', 'D\u2193', 'D\u2190'  // 16-19 (D-pad)
+            ];
+            var NUM_BUTTONS = BTN_NAMES.length;
+            var NUM_AXES = 6; // LX LY RX RY LT RT
+
+            function axisFromByte(v) {
+                return v < 0x80 ? -((0x80 - v) / 0x80) : (v - 0x80) / 0x7F;
+            }
+
+            function hatDirs(h) {
+                return {
+                    u: h === 0 || h === 1 || h === 7,
+                    r: h === 1 || h === 2 || h === 3,
+                    d: h === 3 || h === 4 || h === 5,
+                    l: h === 5 || h === 6 || h === 7,
+                };
+            }
+
+            // Build button cells
+            (function () {
+                var grid = document.getElementById('gp-buttons');
+                for (var i = 0; i < NUM_BUTTONS; i++) {
+                    var cell = document.createElement('div');
+                    cell.className = 'gp-cell';
+                    var lbl = document.createElement('span');
+                    lbl.className = 'gp-cell-label';
+                    lbl.textContent = BTN_NAMES[i];
+                    var val = document.createElement('span');
+                    val.className = 'gp-cell-val';
+                    val.id = 'gp-btn-' + i;
+                    val.textContent = '0.00';
+                    cell.appendChild(lbl);
+                    cell.appendChild(val);
+                    grid.appendChild(cell);
+                }
+            })();
+
+            // Build axis cells: LX LY RX RY LT RT
+            (function () {
+                var names = ['LX', 'LY', 'RX', 'RY', 'LT', 'RT'];
+                var grid = document.getElementById('gp-axes');
+                for (var i = 0; i < NUM_AXES; i++) {
+                    var cell = document.createElement('div');
+                    cell.className = 'gp-cell gp-axis-cell';
+                    var lbl = document.createElement('span');
+                    lbl.className = 'gp-cell-label';
+                    lbl.textContent = names[i];
+                    var val = document.createElement('span');
+                    val.className = 'gp-cell-val';
+                    val.id = 'gp-axis-' + i;
+                    val.textContent = '0.00000';
+                    cell.appendChild(lbl);
+                    cell.appendChild(val);
+                    grid.appendChild(cell);
+                }
+            })();
+
+            function hexToBytes(hex) {
+                if (!hex) return new Uint8Array(0);
+                var n = (hex.length / 2) | 0;
+                var out = new Uint8Array(n);
+                for (var i = 0; i < n; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+                return out;
+            }
+
+            function setStick(svgId, x, y) {
+                var c = document.getElementById(svgId);
+                var d = Math.sqrt(x * x + y * y);
+                if (d > 1) { x /= d; y /= d; }
+                c.setAttribute('cx', (60 + x * 50).toFixed(1));
+                c.setAttribute('cy', (60 + y * 50).toFixed(1));
+            }
+
+            function setBtn(idx, v) {
+                var el = document.getElementById('gp-btn-' + idx);
+                if (!el) return;
+                el.textContent = (v > 0 ? '1.00' : '0.00');
+                el.parentElement.classList.toggle('gp-cell-active', v > 0);
+            }
+
+            function applyReport(connected, report, ts) {
+                var b = hexToBytes(report);
+
+                // ---- Raw byte grid ------------------------------------------
+                var grid = document.getElementById('gp-raw-grid');
+                while (grid.children.length < b.length) {
+                    var idx = grid.children.length;
+                    var cell = document.createElement('div');
+                    cell.className = 'gp-cell gp-raw-cell';
+                    var lbl = document.createElement('span');
+                    lbl.className = 'gp-cell-label';
+                    lbl.textContent = 'B' + idx;
+                    var hexSpan = document.createElement('span');
+                    hexSpan.className = 'gp-cell-val gp-raw-hex';
+                    hexSpan.id = 'gp-raw-hex-' + idx;
+                    hexSpan.textContent = '0x00';
+                    var decSpan = document.createElement('span');
+                    decSpan.className = 'gp-cell-val gp-raw-dec';
+                    decSpan.id = 'gp-raw-dec-' + idx;
+                    decSpan.textContent = '(0)';
+                    cell.appendChild(lbl);
+                    cell.appendChild(hexSpan);
+                    cell.appendChild(decSpan);
+                    grid.appendChild(cell);
+                }
+                while (grid.children.length > b.length) grid.removeChild(grid.lastChild);
+                for (var i = 0; i < b.length; i++) {
+                    var v = b[i];
+                    var hexEl = document.getElementById('gp-raw-hex-' + i);
+                    var decEl = document.getElementById('gp-raw-dec-' + i);
+                    var prev = parseInt(hexEl.dataset.prev !== undefined ? hexEl.dataset.prev : '-1', 10);
+                    hexEl.dataset.prev = v;
+                    hexEl.textContent = '0x' + v.toString(16).padStart(2, '0').toUpperCase();
+                    decEl.textContent = '(' + v + ')';
+                    grid.children[i].classList.toggle('gp-cell-active', prev !== v);
+                }
+
+                if (b.length < 7) {
+                    document.getElementById('gp-connected').textContent = connected ? 'Yes' : 'No';
+                    document.getElementById('gp-connected').classList.toggle('gp-yes', connected);
+                    document.getElementById('gp-timestamp').textContent = (ts / 1000).toFixed(5);
+                    return;
+                }
+
+                // ---- Axes ---------------------------------------------------
+                var lx = axisFromByte(b[1]);
+                var ly = axisFromByte(b[2]);
+                var rx = axisFromByte(b[3]);
+                var ry = axisFromByte(b[4]);
+                var lt = b[6] / 255;   // B6: LT analog 0..1
+                var rt = b[5] / 255;   // B5: RT analog 0..1
+                document.getElementById('gp-axis-0').textContent = lx.toFixed(5);
+                document.getElementById('gp-axis-1').textContent = ly.toFixed(5);
+                document.getElementById('gp-axis-2').textContent = rx.toFixed(5);
+                document.getElementById('gp-axis-3').textContent = ry.toFixed(5);
+                document.getElementById('gp-axis-4').textContent = lt.toFixed(5);
+                document.getElementById('gp-axis-5').textContent = rt.toFixed(5);
+                setStick('gp-stick-l', lx, ly);
+                setStick('gp-stick-r', rx, ry);
+
+                // ---- D-pad --------------------------------------------------
+                var dirs = hatDirs(b[0]);
+
+                // ---- Buttons B7 ---------------------------------------------
+                var b7 = b[7] || 0;
+                var A = (b7 >> 0) & 1;
+                var B = (b7 >> 1) & 1;
+                var unk7b2 = (b7 >> 2) & 1;
+                var X = (b7 >> 3) & 1;
+                var Y = (b7 >> 4) & 1;
+                var unk7b5 = (b7 >> 5) & 1;
+                var LB = (b7 >> 6) & 1;
+                var RB = (b7 >> 7) & 1;
+
+                // ---- Buttons B8 ---------------------------------------------
+                var b8 = b.length > 8 ? b[8] : 0;
+                var LTdig = (b8 >> 0) & 1;
+                var RTdig = (b8 >> 1) & 1;
+                var View = (b8 >> 2) & 1;
+                var Menu = (b8 >> 3) & 1;
+                var Home = (b8 >> 4) & 1;
+                var L3 = (b8 >> 5) & 1;
+                var R3 = (b8 >> 6) & 1;
+                var unk8b7 = (b8 >> 7) & 1;
+
+                // 0=A 1=B 2=X 3=Y 4=LB 5=RB 6=LT 7=RT
+                // 8=?7b2 9=?7b5 10=View 11=Menu 12=Home 13=L3 14=R3 15=?8b7
+                // 16=D^ 17=D> 18=Dv 19=D<
+                setBtn(0, A); setBtn(1, B); setBtn(2, X); setBtn(3, Y);
+                setBtn(4, LB); setBtn(5, RB); setBtn(6, LTdig); setBtn(7, RTdig);
+                setBtn(8, unk7b2); setBtn(9, unk7b5);
+                setBtn(10, View); setBtn(11, Menu); setBtn(12, Home);
+                setBtn(13, L3); setBtn(14, R3); setBtn(15, unk8b7);
+                setBtn(16, dirs.u ? 1 : 0); setBtn(17, dirs.r ? 1 : 0);
+                setBtn(18, dirs.d ? 1 : 0); setBtn(19, dirs.l ? 1 : 0);
+
+                document.getElementById('gp-connected').textContent = connected ? 'Yes' : 'No';
+                document.getElementById('gp-connected').classList.toggle('gp-yes', connected);
+                document.getElementById('gp-timestamp').textContent = (ts / 1000).toFixed(5);
+            }
+
+            // ---- Vibration test --------------------------------------------
+            (function () {
+                var btn = document.getElementById('gp-vibrate');
+                var meta = document.getElementById('gp-meta');
+                btn.addEventListener('click', function () {
+                    btn.disabled = true;
+                    var orig = btn.textContent;
+                    btn.textContent = 'Sending\u2026';
+                    fetch('/api/gamepad/vibrate')
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            if (data.chars === 0) {
+                                btn.textContent = 'No output char!';
+                                meta.textContent = 'Controller has no writable HID output report \u2014 rumble may not be supported in B-mode.';
+                            } else {
+                                btn.textContent = 'Buzzing\u2026';
+                                meta.textContent = 'Vibration sent (' + data.chars + ' output char(s) found)';
+                            }
+                            setTimeout(function () {
+                                btn.textContent = orig;
+                                btn.disabled = false;
+                            }, 1500);
+                        })
+                        .catch(function () {
+                            btn.textContent = orig;
+                            btn.disabled = false;
+                        });
+                });
+            })();
+
+            // ---- Polling loop ----------------------------------------------
+            function gpPoll() {
+                fetch('/api/gamepad').then(function (r) { return r.json(); }).then(function (data) {
+                    applyReport(data.connected, data.report, data.ts);
+                    var meta = document.getElementById('gp-meta');
+                    if (data.connected) {
+                        meta.textContent = (data.name || 'Controller') + '  ' + (data.addr || '');
+                    } else {
+                        meta.textContent = 'Scanning for BLE controller\u2026';
+                    }
+                }).catch(function () {
+                    document.getElementById('gp-meta').textContent = 'Disconnected from server';
+                });
+            }
+            setInterval(gpPoll, 80);
+            gpPoll();
+        })();
+    </script>
+</div>

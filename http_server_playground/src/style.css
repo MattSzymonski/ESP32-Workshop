@@ -132,3 +132,209 @@ h1 {
     min-height: 1.2em;
     font-weight: 500;
 }
+
+/* ===== Gamepad module — Web Gamepad API tester aesthetic ===== */
+.gamepad-card {
+    gap: 10px;
+}
+
+.gp-status-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px 22px;
+    align-items: flex-end;
+    padding: 4px 0 2px;
+}
+
+.gp-status-row-2 {
+    padding-top: 0;
+}
+
+.gp-stat {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+    min-width: 0;
+}
+
+.gp-stat-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    color: var(--text-muted);
+}
+
+.gp-stat-val {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+.gp-stat-val.gp-yes {
+    color: var(--accent);
+}
+
+.gp-stat-dim {
+    color: var(--text-muted);
+}
+
+.gp-stat-test {
+    color: var(--accent);
+}
+
+/* "Test Vibration" sits at the right end of the secondary row, like the
+   "Test Vibration" link in the original Web Gamepad API tester. */
+.gp-stat-actions {
+    align-self: flex-end;
+}
+
+.gp-vibrate-btn {
+    background: transparent;
+    color: var(--accent);
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    text-decoration: none;
+    transition: opacity 0.15s;
+}
+
+.gp-vibrate-btn:hover {
+    opacity: 0.75;
+    text-decoration: underline;
+}
+
+.gp-vibrate-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+    text-decoration: none;
+}
+
+/* Buttons (B0..B17) and axes (AXIS 0..3) grids */
+.gp-buttons {
+    display: grid;
+    grid-template-columns: repeat(9, minmax(0, 1fr));
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.gp-axes {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.gp-cell {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 6px;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+    min-width: 0;
+    transition: background 0.05s, border-color 0.05s, color 0.05s;
+}
+
+.gp-cell-label {
+    font-size: 8.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+}
+
+.gp-cell-val {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+.gp-cell.gp-cell-active {
+    background: rgba(255, 133, 89, 0.14);
+    border-color: var(--accent);
+}
+
+.gp-cell.gp-cell-active .gp-cell-val,
+.gp-cell.gp-cell-active .gp-cell-label {
+    color: var(--accent);
+}
+
+/* Stick visualisations + silhouette row */
+.gp-bottom-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.gp-sticks {
+    display: flex;
+    gap: 8px;
+}
+
+.gp-stick {
+    flex-shrink: 0;
+}
+
+.gp-silhouette {
+    width: 200px;
+    height: 130px;
+    flex-shrink: 0;
+    opacity: 0.55;
+}
+
+.gp-diagnostics {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+    border-top: 1px dashed var(--border);
+    padding-top: 10px;
+}
+
+.gp-raw-header {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    color: var(--text-muted);
+    margin-top: 10px;
+    margin-bottom: 4px;
+    border-top: 1px dashed var(--border);
+    padding-top: 8px;
+}
+
+.gp-raw-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
+    gap: 4px;
+}
+
+.gp-raw-cell {
+    align-items: flex-start;
+}
+
+.gp-raw-hex {
+    font-family: 'SF Mono', 'Consolas', monospace;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+}
+
+.gp-raw-dec {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.gp-meta {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}

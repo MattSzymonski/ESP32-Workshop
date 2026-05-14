@@ -16,3 +16,6 @@ ESP_IDF_PATH_ISSUES = "warn"
 # Relocate ESP-IDF toolchain (gcc, cmake, python venv) to a short path.
 # esp-idf-sys reads ESP_IDF_TOOLS_INSTALL_DIR; "custom:<path>" means install there.
 ESP_IDF_TOOLS_INSTALL_DIR = "custom:C:\\esp\\tools"
+# Because we override `target-dir` above, embuild can't infer the workspace
+# directory and would otherwise ignore sdkconfig.defaults. Pin it explicitly.
+CARGO_WORKSPACE_DIR = { value = "", relative = true }

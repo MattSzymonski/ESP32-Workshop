@@ -13,3 +13,33 @@ CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
 
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# --- Bluetooth Low Energy (NimBLE) ---
+# Required by the `gamepad` module which uses esp32-nimble as a BLE central
+# to talk to a BLE HID gamepad (e.g. 8BitDo Ultimate 2C in BT mode).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=y
+# Bigger NimBLE host stack — discovery + bonding callbacks are deeper than the default.
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=8192
+
+# --- Wi-Fi / BLE coexistence (mandatory on ESP32-C6) ---
+# Without these two, `r_ble_controller_init` fails with code 257 / "ll env init
+# error code:-10" once Wi-Fi has been started, because the BLE controller and
+# Wi-Fi MAC fight over the same radio without arbitration.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+CONFIG_ESP_WIFI_SOFTAP_BEACON_MAX_LEN=752
+
+# Use only BLE in the controller (no Classic BT — saves ~30 KiB RAM).
+CONFIG_BT_CTRL_MODE_EFF_BLE_ONLY=y
+
+# Lower BLE controller memory footprint so it actually fits next to Wi-Fi.
+# Each ACL connection costs ~1 KiB; we only ever talk to one gamepad.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Smaller ATT MTU (we only read tiny HID reports).
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=128
+# We only act as a central, never advertise — saves RAM for advertising sets.
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
